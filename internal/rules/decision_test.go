@@ -220,6 +220,38 @@ func TestDecisionRestartCancellation(t *testing.T) {
 	}
 }
 
+func TestDecisionAvoidsConcedingWhenPlayAvailable(t *testing.T) {
+	d, s, in := decisionFixture(t)
+	defer d.Close()
+	s.Cards[2].Zone = Board
+	s.Cards[2].Row = 0
+	s.Cards[2].Power = 10
+	s.Passed[1] = true
+	v, err := s.View(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.View = v
+	in.Candidates = []Action{{Kind: "pass"}, {Kind: "play", Card: s.Cards[0].ID}}
+	if err := d.Start(in); err != nil {
+		t.Fatal(err)
+	}
+	for time.Now().Before(in.Deadline) {
+		a, err := d.Poll(in)
+		if err == nil {
+			if a.Kind != "play" {
+				t.Fatalf("conceded: %+v", a)
+			}
+			if err := d.Start(in); err != nil {
+				t.Fatalf("restart after result: %v", err)
+			}
+			return
+		}
+		runtime.Gosched()
+	}
+	t.Fatal("no result")
+}
+
 func BenchmarkDecisionFast(b *testing.B) {
 	d, _, in := decisionFixture(b)
 	defer d.Close()

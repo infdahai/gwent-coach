@@ -149,6 +149,7 @@ func (d *DecisionService) Start(in DecisionInput) error {
 	if d.running {
 		if d.cancel != nil {
 			d.cancel()
+			d.cancel = nil
 		}
 		d.generation++
 		d.result = nil
@@ -167,7 +168,9 @@ func (d *DecisionService) Start(in DecisionInput) error {
 func (d *DecisionService) analyze(ctx context.Context, generation uint64, in DecisionInput) {
 	defer func() {
 		d.mu.Lock()
-		d.running = false
+		if d.generation == generation || d.cancel == nil {
+			d.running = false
+		}
 		if d.generation == generation && d.cancel != nil {
 			d.cancel()
 			d.cancel = nil
@@ -183,6 +186,7 @@ func (d *DecisionService) analyze(ctx context.Context, generation uint64, in Dec
 	// represented only by their counts, never guessed as known identities.
 	best := Action{}
 	bestScore := -int(^uint(0) >> 1)
+	bestOutcome := -2
 	found := false
 	for _, a := range in.Candidates {
 		select {
@@ -198,13 +202,22 @@ func (d *DecisionService) analyze(ctx context.Context, generation uint64, in Dec
 			continue
 		}
 		score := next.Score(in.Player) - next.Score(1-in.Player)
+		outcome := 0
+		if a.Kind == "pass" && s.Passed[1-in.Player] {
+			score = s.Score(in.Player) - s.Score(1-in.Player)
+			if score < 0 {
+				outcome = -1
+			} else if score > 0 {
+				outcome = 1
+			}
+		}
 		// An uncontested round win preserves every remaining card.
-		if a.Kind == "pass" && s.Passed[1-in.Player] && s.Score(in.Player) > s.Score(1-in.Player) {
+		if outcome == 1 {
 			best, found = a, true
 			break
 		}
-		if !found || score > bestScore {
-			best, bestScore, found = a, score, true
+		if !found || outcome > bestOutcome || (outcome == bestOutcome && score > bestScore) {
+			best, bestScore, bestOutcome, found = a, score, outcome, true
 		}
 	}
 	if !found || ctx.Err() != nil || !time.Now().Before(in.Deadline) {
@@ -215,6 +228,9 @@ func (d *DecisionService) analyze(ctx context.Context, generation uint64, in Dec
 	defer d.mu.Unlock()
 	if d.generation == generation && ctx.Err() == nil && time.Now().Before(in.Deadline) {
 		d.result = p
+		d.running = false
+		d.cancel()
+		d.cancel = nil
 	}
 }
 
