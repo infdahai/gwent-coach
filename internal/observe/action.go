@@ -4,11 +4,14 @@ import "fmt"
 
 // Action is a single operator-reviewed input tied to a recent observation.
 type Action struct {
-	Kind      string `json:"kind"`
-	X         int    `json:"x"`
-	Y         int    `json:"y"`
-	Reference string `json:"reference"`
-	StopFile  string `json:"stop_file"`
+	Kind          string `json:"kind"`
+	X             int    `json:"x"`
+	Y             int    `json:"y"`
+	Reference     string `json:"reference"`
+	StopFile      string `json:"stop_file"`
+	PhaseModel    string `json:"phase_model,omitempty"`
+	ExpectedPhase string `json:"expected_phase,omitempty"`
+	phaseModel    *PhaseModel
 }
 
 func (a Action) Validate() error {

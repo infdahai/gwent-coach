@@ -100,7 +100,7 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 	if err := json.Unmarshal(data, &ref); err != nil {
 		return err
 	}
-	if ref.ImageSize.X != 0 || ref.ImageSize.Y != 0 {
+	if a.PhaseModel == "" && (ref.ImageSize.X != 0 || ref.ImageSize.Y != 0) {
 		for _, window := range ref.Windows {
 			if window.Handle == ref.Foreground && (ref.ImageSize.X != int(window.Client.Right-window.Client.Left) || ref.ImageSize.Y != int(window.Client.Bottom-window.Client.Top)) {
 				return fmt.Errorf("resized observation is not an input reference; capture native pixels")
@@ -158,9 +158,18 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 	if _, err := actionWindow(a, ref); err != nil {
 		return err
 	}
+	// Consume the reference before cursor motion, which itself can change UI state.
+	claim, err := os.OpenFile(a.Reference+".input-used", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("reference already consumed or cannot be claimed: %w", err)
+	}
+	if err := claim.Close(); err != nil {
+		return err
+	}
 	var inputs [2]nativeInput
 	if a.Kind == "click" || a.Kind == "hold" {
 		x, y := w.Client.Left+int32(a.X), w.Client.Top+int32(a.Y)
+		result.Outcome = "cursor_move_attempted_requires_review"
 		r, _, err := user32.NewProc("SetCursorPos").Call(uintptr(x), uintptr(y))
 		if r == 0 {
 			return fmt.Errorf("SetCursorPos: %w", err)
@@ -195,13 +204,53 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 	if _, err := actionWindow(a, ref); err != nil {
 		return err
 	}
-	// A reference is consumed before sending input, including uncertain outcomes.
-	claim, err := os.OpenFile(a.Reference+".input-used", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return fmt.Errorf("reference already consumed or cannot be claimed: %w", err)
+	// Autonomous input rechecks semantic anchors immediately before the event.
+	if a.PhaseModel != "" {
+		if a.Kind != "click" || a.ExpectedPhase == "" {
+			return fmt.Errorf("invalid semantic action")
+		}
+		if age := time.Since(observed); age < 0 || age > 2*time.Second {
+			return fmt.Errorf("autonomous reference expired")
+		}
+		model := a.phaseModel
+		if model == nil {
+			return fmt.Errorf("semantic action requires bound in-memory model")
+		}
+		fresh, err := screenshot.Capture(int(w.Client.Left), int(w.Client.Top), int(w.Client.Right-w.Client.Left), int(w.Client.Bottom-w.Client.Top))
+		if err != nil {
+			return err
+		}
+		phase, _ := model.Recognize(fresh)
+		if phase != a.ExpectedPhase {
+			return fmt.Errorf("semantic input guard rejected phase %q", phase)
+		}
+		if _, err = actionWindow(a, ref); err != nil {
+			return err
+		}
 	}
-	if err := claim.Close(); err != nil {
+	// Cursor motion may have changed the interface, even if no click is delivered.
+	if a.Kind != "escape" {
+		result.Outcome = "cursor_moved_requires_review"
+	}
+	if _, err := actionWindow(a, ref); err != nil {
 		return err
+	}
+	if a.Kind != "escape" {
+		x, y := w.Client.Left+int32(a.X), w.Client.Top+int32(a.Y)
+		var cursor point
+		r, _, err := user32.NewProc("GetCursorPos").Call(uintptr(unsafe.Pointer(&cursor)))
+		if r == 0 {
+			return fmt.Errorf("GetCursorPos: %w", err)
+		}
+		if cursor.X != x || cursor.Y != y {
+			return fmt.Errorf("cursor moved before delivery; input refused")
+		}
+		packed := uintptr(uint64(uint32(x)) | uint64(uint32(y))<<32)
+		target, _, _ := user32.NewProc("WindowFromPoint").Call(packed)
+		root, _, _ := user32.NewProc("GetAncestor").Call(target, 2)
+		if root != w.Handle {
+			return fmt.Errorf("target covered before delivery")
+		}
 	}
 	if a.Kind == "hold" {
 		n, _, err := user32.NewProc("SendInput").Call(1, uintptr(unsafe.Pointer(&inputs[0])), unsafe.Sizeof(inputs[0]))

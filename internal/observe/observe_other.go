@@ -7,6 +7,10 @@ import (
 	"log"
 )
 
+func navigatePlatform(_ string, _ *log.Logger, _ Navigation, _ *PhaseModel) error {
+	return fmt.Errorf("navigation requires Windows interactive desktop")
+}
+
 func Execute(_ string, _ *log.Logger, _ Action) error {
 	return fmt.Errorf("input requires Windows interactive desktop")
 }
