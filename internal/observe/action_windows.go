@@ -100,6 +100,13 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 	if err := json.Unmarshal(data, &ref); err != nil {
 		return err
 	}
+	if ref.ImageSize.X != 0 || ref.ImageSize.Y != 0 {
+		for _, window := range ref.Windows {
+			if window.Handle == ref.Foreground && (ref.ImageSize.X != int(window.Client.Right-window.Client.Left) || ref.ImageSize.Y != int(window.Client.Bottom-window.Client.Top)) {
+				return fmt.Errorf("resized observation is not an input reference; capture native pixels")
+			}
+		}
+	}
 	observed, err := time.Parse(time.RFC3339Nano, ref.Time)
 	if err != nil {
 		return err

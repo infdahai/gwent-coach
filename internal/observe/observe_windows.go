@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/png"
 	"log"
 	"os"
 	"path/filepath"
@@ -48,6 +47,9 @@ type report struct {
 	Windows      []gameWindow      `json:"game_windows"`
 	Screenshot   string            `json:"screenshot,omitempty"`
 	Error        string            `json:"error,omitempty"`
+	CapturedAt   string            `json:"captured_at,omitempty"`
+	DurationMS   float64           `json:"duration_ms"`
+	ImageSize    image.Point       `json:"image_size"`
 }
 
 func sessionID(pid uint32) (uint32, error) {
@@ -144,7 +146,11 @@ func enableDPI() error {
 	return dpiErr
 }
 
-func Run(out string, logger *log.Logger) (runErr error) {
+func Run(out string, logger *log.Logger) error {
+	return runSample(out, logger, Sampling{})
+}
+
+func runSample(out string, logger *log.Logger, sampling Sampling) (runErr error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	started := time.Now().UTC()
@@ -157,6 +163,7 @@ func Run(out string, logger *log.Logger) (runErr error) {
 		if runErr != nil {
 			rpt.Error = runErr.Error()
 		}
+		rpt.DurationMS = float64(time.Since(started)) / float64(time.Millisecond)
 		data, err := json.MarshalIndent(rpt, "", "  ")
 		if err == nil {
 			err = os.WriteFile(filepath.Join(dir, "report.json"), append(data, '\n'), 0644)
@@ -220,12 +227,17 @@ func Run(out string, logger *log.Logger) (runErr error) {
 	if foreground != selected.Handle || !strings.EqualFold(desktop, "Default") {
 		return fmt.Errorf("foreground or input desktop changed during capture; image discarded")
 	}
+	rpt.CapturedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	name := filepath.Join(dir, "game.png")
+	if sampling.JPEGQuality > 0 {
+		name = filepath.Join(dir, "game.jpg")
+	}
 	f, err := os.Create(name)
 	if err != nil {
 		return err
 	}
-	encodeErr := png.Encode(f, img)
+	size, encodeErr := encodeFrame(f, img, sampling)
+	rpt.ImageSize = size
 	closeErr := f.Close()
 	if err := errors.Join(encodeErr, closeErr); err != nil {
 		return err
