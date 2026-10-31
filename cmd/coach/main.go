@@ -26,12 +26,20 @@ func main() {
 	modelSHA := flag.String("phase-model-sha256", "", "expected SHA-256 of phase model")
 	labels := flag.String("build-phases", "", "label manifest to compile into -phase-model")
 	recognize := flag.String("recognize", "", "image to classify without input")
+	replay := flag.String("replay-phases", "", "labelled frame manifest for observation-only JSONL replay")
 	navigate := flag.Bool("navigate-training", false, "bounded guarded navigation; never starts a match")
 	state := flag.String("navigation-state", "", "new persistent session directory; never reuse after uncertain input")
 	steps := flag.Int("steps", 5, "navigation transition bound, 1..8")
 	flag.Parse()
 	if *labels != "" {
 		if err := observe.BuildPhases(*labels, *model); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *replay != "" {
+		if err := observe.ReplayPhases(*model, *replay, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
