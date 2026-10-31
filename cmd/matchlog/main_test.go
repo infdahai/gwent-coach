@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const valid = `{"schema_version":1,"match_id":"m1","sequence":1,"utc":"2026-10-31T12:00:00Z","elapsed_ns":0,"event_type":"observation","timing_ms":{"observation":12}}
@@ -50,11 +51,24 @@ func TestFetchStreamsMockSSH(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	var items []remoteItem
-	if err := fetch(context.Background(), "test", `C:\test`, func(item remoteItem) error { items = append(items, item); return nil }); err != nil {
+	if err := fetch(context.Background(), "test", `C:\test`, time.Second, func(item remoteItem) error { items = append(items, item); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if len(items) != 1 || items[0].Name != "m1" {
 		t.Fatalf("%+v", items)
+	}
+}
+
+func TestFetchStalledSSH(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\nexec sleep 30\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	start := time.Now()
+	err := fetch(context.Background(), "test", `C:\test`, 100*time.Millisecond, func(remoteItem) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "no output progress") || time.Since(start) > 3*time.Second {
+		t.Fatalf("timeout: %v after %s", err, time.Since(start))
 	}
 }
 

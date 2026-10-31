@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf16"
@@ -129,8 +130,32 @@ type remoteItem struct {
 	Error    string `json:"error"`
 }
 
+type progressReader struct {
+	io.Reader
+	progress chan<- struct{}
+	latest   *atomic.Int64
+	start    time.Time
+}
+
+func (r progressReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if n > 0 {
+		r.latest.Store(time.Since(r.start).Nanoseconds())
+		select {
+		case r.progress <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
+}
+
 // PowerShell receives the explicit source path encoded as data, not executable syntax.
-func fetch(ctx context.Context, host, source string, consume func(remoteItem) error) error {
+func fetch(ctx context.Context, host, source string, timeout time.Duration, consume func(remoteItem) error) error {
+	if timeout <= 0 {
+		return errors.New("progress timeout must be positive")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	script := `$ErrorActionPreference='Stop'; $p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('` + base64.StdEncoding.EncodeToString([]byte(source)) + `')); Get-ChildItem -LiteralPath $p -Directory | ForEach-Object { $d=$_; $m=Join-Path $d.FullName 'COMPLETE'; $f=Join-Path $d.FullName 'events.jsonl'; $o=@{name=$d.Name;complete=(Test-Path -LiteralPath $m -PathType Leaf);data='';error=''}; if($o.complete) { try { $i=Get-Item -LiteralPath $f; if($i.Length -gt 16777216){throw 'log exceeds 16 MiB'}; $o.data=[Convert]::ToBase64String([IO.File]::ReadAllBytes($f)) } catch { $o.error=$_.Exception.Message } }; $o | ConvertTo-Json -Compress }`
 	words := utf16.Encode([]rune(script))
 	raw := make([]byte, len(words)*2)
@@ -147,7 +172,45 @@ func fetch(ctx context.Context, host, source string, consume func(remoteItem) er
 	if err = cmd.Start(); err != nil {
 		return err
 	}
-	s := bufio.NewScanner(pipe)
+	progress := make(chan struct{}, 1)
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	start := time.Now()
+	var latest atomic.Int64
+	var timedOut atomic.Bool
+	go func() {
+		defer close(stopped)
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				_ = pipe.Close()
+				return
+			case <-progress:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(timeout)
+			case <-timer.C:
+				remaining := timeout - (time.Since(start) - time.Duration(latest.Load()))
+				if remaining > 0 {
+					timer.Reset(remaining)
+					continue
+				}
+				timedOut.Store(true)
+				cancel()
+				_ = pipe.Close()
+				return
+			}
+		}
+	}()
+	s := bufio.NewScanner(progressReader{Reader: pipe, progress: progress, latest: &latest, start: start})
 	s.Buffer(make([]byte, 4096), 24<<20)
 	var failures int
 	for s.Scan() {
@@ -167,6 +230,11 @@ func fetch(ctx context.Context, host, source string, consume func(remoteItem) er
 		_ = cmd.Process.Kill()
 	}
 	waitErr := cmd.Wait()
+	close(done)
+	<-stopped
+	if timedOut.Load() {
+		return fmt.Errorf("ssh retrieval: no output progress for %s", timeout)
+	}
 	if scanErr != nil {
 		return scanErr
 	}
@@ -305,16 +373,17 @@ func run() error {
 		dest := fs.String("dest", "", "local destination")
 		host := fs.String("host", "redmi-gpro", "existing SSH host")
 		watch := fs.Duration("watch", 0, "poll interval; zero imports once")
+		progressTimeout := fs.Duration("progress-timeout", 2*time.Minute, "maximum time without SSH output")
 		if err := fs.Parse(os.Args[2:]); err != nil {
 			return err
 		}
-		if *source == "" || *dest == "" || *watch < 0 || strings.HasPrefix(*host, "-") {
+		if *source == "" || *dest == "" || *watch < 0 || *progressTimeout <= 0 || strings.HasPrefix(*host, "-") {
 			return errors.New("source and dest required; invalid host or interval")
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		for {
-			err := fetch(ctx, *host, *source, func(item remoteItem) error {
+			err := fetch(ctx, *host, *source, *progressTimeout, func(item remoteItem) error {
 				return importItems(*dest, []remoteItem{item}, os.Stdout)
 			})
 			if err != nil {
