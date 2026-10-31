@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	github.com/kbinani/screenshot v0.0.0-20250624051815-089614a94018
+	go.etcd.io/bbolt v1.4.3
 	golang.org/x/sys v0.49.0
 )
 

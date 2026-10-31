@@ -23,4 +23,6 @@ See [architecture, evidence and next coverage steps](docs/NATIVE_RULES.md). Roun
 
 Bounded Windows observation sampling supports reduced-resolution JPEG and per-frame timing. See [training autoplay status and measured sampling results](docs/TRAINING_AUTOPLAY.md). Autonomous match acceptance remains unmet; sampling does not play the game.
 
+See [persistent card/effect lookup and image candidates](docs/CARD_LOOKUP.md) for the local database, explicit art-ROI matcher, CLI commands, integration APIs, and measured costs. Image results remain unvalidated candidates.
+
 No screenshots, run archives or local machine notes are included in the public repository.
