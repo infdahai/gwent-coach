@@ -18,6 +18,7 @@ type Card struct {
 	Category   string `json:"category"`
 	Ability    string `json:"ability"`
 	Attributes struct {
+		Set       string `json:"set"`
 		Power     int    `json:"power"`
 		Armor     int    `json:"armor"`
 		Provision int    `json:"provision"`
