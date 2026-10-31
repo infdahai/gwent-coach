@@ -1,0 +1,11 @@
+/dist/
+/runs/
+*.exe
+/data/cards/*/*/cards.json
+/docs/BEARLY_BALANCED_DESIGN.md
+/docs/DEEPSEEK_USAGE.md
+/docs/EXECUTION_PLAN.md
+/docs/MVP_SCOPE_AND_VALIDATION.md
+/docs/OBSERVATION_BASELINE.md
+/docs/ORIGINAL_RESEARCH.md
+/docs/TRAINING_MATCH_20261031.md
