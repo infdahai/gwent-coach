@@ -1,42 +1,42 @@
-# 原生规则基础与覆盖计划
+# Native Rules Foundation and Coverage Plan
 
-## 实际交付
+## Delivered implementation
 
-`internal/rules` 是纯 Go、无联网解释的离线模拟内核。`native-v1` 固定使用 14.10.0 英文卡库；注册时按 ID 核对完整能力原文。中英文导入继续保留所有 1,381 项，按 ID 一一对应。类型分布：Unit 1015、Special 231、Artifact 73、Ability 49、Stratagem 13。set=NonOwnable 有 121 项；这不是精确 token 数，也不是当前客户端全覆盖证明。原始快照保留了解析结构之外的字段。
+`internal/rules` is a pure Go offline simulation core with no network-based interpretation. `native-v1` pins the English 14.10.0 card catalog and validates the complete ability text by card ID during registration. The English and Chinese imports retain all 1,381 entries, matched one-to-one by ID: 1,015 Units, 231 Specials, 73 Artifacts, 49 Abilities, and 13 Stratagems. There are 121 entries with `set=NonOwnable`; this is neither an exact token count nor proof of full coverage of the current client. Raw snapshots retain fields beyond the parsed structure.
 
-原生支持 6 项：152405 Elder Bear、113301 Alzur's Thunder、113310 Swallow、202465 Stunning Blow、202411 Piercing Missile、202462 Terror Crew Plunderer。其余 1,375 项逐卡输出 unsupported，创建模拟局或导入状态时拒绝使用，绝不当无能力牌。这里的“支持”仅针对六张卡组成的受限环境，不声称和未实现的护盾、免疫、卫士、锁定等机制交互正确。
+Six cards have native support: 152405 Elder Bear, 113301 Alzur's Thunder, 113310 Swallow, 202465 Stunning Blow, 202411 Piercing Missile, and 202462 Terror Crew Plunderer. Each of the remaining 1,375 entries is reported as unsupported and rejected when creating a simulation or importing state, rather than treated as a card without an ability. Support applies only to the restricted environment composed of these six cards; it does not establish correct interaction with unimplemented mechanics such as Shield, Immunity, Defender, or Lock.
 
-卡实例有稳定 ID、基础卡 ID、拥有者、区域、行、战力、护甲。手牌/牌库/场上/墓地转移保留实例数量。规则执行先复制状态，再验证并结算，失败返回原状态且不产生事件。事件包含单调序号、动作和结果快照；回放重新执行并比较结果，拒绝乱序、篡改和版本不匹配。此版以状态快照换取审计简单性，尚未做紧凑事件编码。导入和每次执行后的结构验证检查终局一致性、支持卡身份及行容量；本实验配置将单卡战力/护甲限制在 0–1,000,000，超限原子拒绝，避免整数溢出。手牌及牌库属性只能为基础值，手牌增益尚不支持。
+Card instances have stable instance IDs, base card IDs, owners, zones, rows, power, and armor. Transfers among hand, deck, board, and graveyard preserve instance counts. Rule execution copies state before validation and resolution; failure returns the original state without events. Events contain monotonic sequence numbers, actions, and result snapshots. Replay executes the actions again and compares results, rejecting reordered or modified events and version mismatches. This version uses state snapshots for straightforward auditing; compact event encoding is not implemented. Structural validation on import and after each action checks terminal-state consistency, supported card identity, and row capacity. The experimental profile limits each card's power and armor to 0–1,000,000 and atomically rejects values outside that range to prevent integer overflow. Hand and deck attributes must remain at base values; hand buffs are unsupported.
 
-伤害先消耗护甲，剩余伤害降低战力；穿甲不消耗护甲；战力归零进入墓地。增益不影响护甲。部署作为一次原子 play 执行，随后交替行动；对方已 Pass 时当前方可继续出牌。引擎不是 UI 操作阶段机，play 不代表鼠标点击或 EndTurn 已被客户端确认。
+Damage consumes armor before reducing power; armor-piercing damage does not consume armor. Cards at zero power enter the graveyard. Boosts do not affect armor. Deploy resolves within one atomic `play` action, followed by alternating turns; a player may continue playing after the opponent passes. The engine is not a UI interaction state machine: `play` does not mean that a mouse click or EndTurn has been confirmed by the client.
 
-## 规则依据与未核实约定
+## Rule evidence and unverified conventions
 
-官方 https://www.playgwent.com/en/how-to-play 明确“Gather more points than your opponent to win a round”及“Win two out of three rounds to win the battle”（2026-10-31 查阅）。护甲说明来自同一版本卡库 keyword_html：护甲抵挡伤害、不计入战力及分数。六张卡的效果来自本地导入快照原文，注册表保留核对用短文本。
+The official [how-to-play page](https://www.playgwent.com/en/how-to-play) states “Gather more points than your opponent to win a round” and “Win two out of three rounds to win the battle” (consulted 2026-10-31). Armor behavior comes from `keyword_html` in the same catalog version: armor blocks damage and does not count toward power or score. The six card effects come from locally imported snapshot text; the registry retains short ability excerpts for verification.
 
-`native-v1` **是显式的离线实验规则，不是已验证的标准模式复刻**：平局双方各记一局，双方同时达到两局为整场平局；单方先到两局立即结束。测试覆盖 2–0、两次平局、1–1 后第三局平局。平局约定此次未取得可独立核验的官方文字，因此不可作为当前客户端验收依据。若正式模式证据不同，需要新 ruleset 与测试，不能静默改旧回放。
+`native-v1` **is an explicit offline experimental ruleset, not a verified reproduction of standard mode**. A tied round awards a round to both players; both reaching two round wins simultaneously produces a match draw. A player reaching two round wins alone ends the match immediately. Tests cover 2–0, two tied rounds, and a tied third round after 1–1. Independently verifiable official text for these tie conventions was not obtained in this work, so they cannot serve as acceptance criteria for the current client. Conflicting evidence from an official mode requires a new ruleset and tests, not silent changes to old replays.
 
-换局保留未出手牌及未抽牌库、清理已出单位。换局使用 start_round 显式给定下一位行动者及双方抽牌数量（0–3，手牌上限 10、不能透支牌库），按初始牌库顺序抽取。训练记录第二局 +3 是背景证据，不是所有模式的规则证明。此版不猜平局先手、不自动换牌、不模拟熊之平衡第三局自动出牌、不验证赛前卡组预算及复制数。行容量 9 与手牌上限 10 同样是本离线配置约束，尚待当前客户端规则核验。
+Round transitions retain unplayed hands and undrawn decks and clear played units. `start_round` explicitly supplies the next player and each player's draw count (0–3, subject to a hand limit of 10 and available deck size); draws follow the initial deck order. A training record showing three cards drawn in round two is contextual evidence, not proof for every mode. This version does not infer who starts after a tie, automatically mulligan, simulate Bearly Balanced's third-round automatic play, or validate pre-match deck budgets and copy limits. Row capacity 9 and hand limit 10 are also offline profile constraints awaiting verification against current client rules.
 
-## 状态与信息边界
+## State and information boundaries
 
-模拟器持有全信息以供确定性测试；`State.View(player)` 仅返回己方手牌、公开区域及双方手牌/牌库计数，不返回对方隐藏身份或任何牌库顺序。策略只能消费 View；事件文件和完整 State 是离线特权数据，不可直接交给实战策略。未抽牌的身份不推断为对方手牌。
+The simulator holds full information for deterministic testing. `State.View(player)` exposes only the player's own hand, public zones, and both players' hand and deck counts; it hides opposing card identities and all deck order. Policies must consume only the View. Event files and full State objects are privileged offline data and must not be passed directly to a live policy. Undrawn card identities are not inferred to be cards in the opponent's hand.
 
-Tracker 将 confirmed 与 pending 分离。Predict 产生预测；Delivered 只记录输送；Confirm 需要新观察来源及稳定公开状态吻合。未确认时拒绝重发。失配保留旧确认态；Reconcile 用独立确认事件从旧态重放，支持对手行动和已知抽牌结果。事件验证不是证据真实性认证，调用者仍负责观察来源及身份核实。
+Tracker separates confirmed and pending state. Predict creates a prediction; Delivered records only transport. Confirm requires a fresh observation source and a matching stable public state. Resending is rejected while confirmation is pending. A mismatch preserves the previous confirmed state. Reconcile replays independently confirmed events from that state, supporting opponent actions and known draw results. Event validation does not authenticate evidence; callers remain responsible for observation provenance and identity verification.
 
-当前 Tracker 是模拟适配器，要求底层全信息初态；**尚不支持真实未知对手手牌的部分状态估计**。Confirm 当前比较完整公开视图，未接 OCR、增量视觉观测、置信度、随机结果输入、历史观察去重或 live 策略。保留这个边界，避免伪称已完成事件驱动实战识别。
+Tracker currently adapts simulations and requires a full-information initial state. **It does not yet estimate partial state with genuinely unknown opposing hands.** Confirm compares the complete public view; OCR, incremental visual observations, confidence estimates, random-result inputs, historical observation deduplication, and live policies are not integrated. This boundary prevents claims that event-driven live recognition is complete.
 
-## 后续实施顺序
+## Implementation priorities
 
-1. 增加来源核验的模式规则档案，补标准模式和季节模式的平局、先手、自动抽牌、换牌及第三局规则；每种模式独立版本。
-2. 给观察态引入未知实例和数量约束，增量观察只处理新抽牌、随机结果、对手行动；不一致才请求局部/全局校准。接入现有输入账本，但仍须语义确认。
-3. 逐卡扩展显式效果：锁定、流血、中毒、状态复制、召唤、生成、放逐、回合触发。每个效果有原文对照、正常/边界/失败测试，再改变覆盖状态；不能通过仅识别关键词标记支持。
-4. 在受支持卡组上加入合法动作枚举、三局两胜终局奖励的有限搜索、仅消费公开视图的对手采样和自对战评估。当前没有决策优化或胜率声明。未来强化学习复用 Apply/Replay，训练特权态与策略观察分开。
+1. Add mode profiles with verified sources for ties, starting players, automatic draws, mulligans, and third-round rules in standard and seasonal modes. Version each mode independently.
+2. Introduce unknown instances and count constraints into observation state. Process newly drawn cards, random results, and opponent actions incrementally; request local or full recalibration only on inconsistencies. Integrate the existing input ledger while retaining semantic confirmation.
+3. Expand explicit effects card by card: Lock, Bleeding, Poison, status copying, summoning, spawning, banishing, and turn triggers. Require source-text comparison and normal, boundary, and failure tests before changing coverage status. Keyword recognition alone cannot establish support.
+4. Add legal-action enumeration, bounded search with best-of-three terminal rewards, opponent sampling using only public views, and self-play evaluation for supported decks. There is currently no decision optimization or win-rate claim. Future reinforcement learning should reuse Apply/Replay and separate privileged training state from policy observations.
 
-## 开源前检查
+## Public release checks
 
-未提交截图、运行归档、可执行文件或用户配置。包含本地路径、训练任务名、环境描述及模型路由标识的历史研究文档已从公开历史移除，仅保留于本地忽略文件。data/cards/README.md 的历史下载链接包含占位 key，已改为无凭据来源说明。
+Screenshots, run archives, executables, and user configuration are not committed. Historical research documents containing local paths, training task names, environment descriptions, and model-routing identifiers were removed from public history and remain only in locally ignored files. Historical download links in `data/cards/README.md` contained a placeholder key and were replaced with credential-free source instructions.
 
-卡库文本/插画相关权利属于相应作者及 CD PROJEKT RED，来源 gwent.one；公开 API 可访问不等于获得再分发许可。完整卡库已从待公开历史移除，改为来源元数据与用户本地导入，详见 data/cards/README.md。六个效果定义保留核对所需的短能力原文。本次不擅自为既有代码指定 LICENSE；仓库公开可见不等同于代码已有明确开源许可证，维护者仍需选择许可证。
+Card text and artwork rights belong to their respective creators and CD PROJEKT RED; the catalog source is gwent.one. Public API access does not establish redistribution permission. Full card snapshots were removed from the history prepared for publication and replaced with source metadata and local import instructions; see [card data setup](../data/cards/README.md). The six effect definitions retain short ability excerpts needed for verification. No LICENSE was assigned to existing code in this work; public repository visibility does not establish an explicit open-source license. The maintainer still needs to choose one.
 
-原始 baseline 5ddc36d 含本地研究文档及第三方快照，从未推送。获用户授权后重写为 ee861b3，删除这些文件的公开历史入口（本地忽略文件继续保留），README 改为通用说明。Windows 脚本的 C:\\coach 是默认部署目录，不含实际账号或远端主机配置。发布仅推送审查后的明确分支，不推送旧对象或其他分支。
+The original baseline `5ddc36d`, containing local research documents and third-party snapshots, was never pushed. With user authorization, it was rewritten as `ee861b3`, removing those files from public history while retaining locally ignored copies and making the README generic. The Windows scripts use `C:\\coach` as a default deployment directory; they contain no actual account or remote host configuration. Publication pushes only the explicitly reviewed branch, not old objects or other branches.
