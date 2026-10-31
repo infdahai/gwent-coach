@@ -14,6 +14,17 @@ func TestBilingualSnapshot(t *testing.T) {
 	if cn.Version != en.Version || len(cn.Cards) != len(en.Cards) || len(cn.Cards) != 1381 {
 		t.Fatal("snapshot versions or counts differ")
 	}
+	types := map[string]int{}
+	nonOwnable := 0
+	for _, card := range en.Cards {
+		types[card.Attributes.Type]++
+		if card.Attributes.Set == "NonOwnable" {
+			nonOwnable++
+		}
+	}
+	if nonOwnable != 121 || types["Unit"] != 1015 || types["Special"] != 231 || types["Artifact"] != 73 || types["Ability"] != 49 || types["Stratagem"] != 13 {
+		t.Fatalf("snapshot inventory changed: %v, non-ownable=%d", types, nonOwnable)
+	}
 	for id, card := range cn.Cards {
 		other, ok := en.Cards[id]
 		if !ok || card.ID.Art != other.ID.Art || card.Attributes != other.Attributes {
