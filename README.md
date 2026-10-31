@@ -21,4 +21,6 @@ The pure Go `native-v1` offline engine implements six pinned card abilities, arm
 
 See [architecture, evidence and next coverage steps](docs/NATIVE_RULES.md). Round ties and transition constraints are explicit experimental profile choices, not verified seasonal rules. The simulator holds full information, while policy views hide opponent hands and deck order. Live partial-state tracking, OCR, full-card effects, search, self-play tuning and reinforcement learning are not implemented. Tests intentionally fail with a missing-file error until snapshots are imported; no network access occurs during tests.
 
+See [persistent card/effect lookup and image candidates](docs/CARD_LOOKUP.md) for the local database, explicit art-ROI matcher, CLI commands, integration APIs, and measured costs. Image results remain unvalidated candidates.
+
 No screenshots, run archives or local machine notes are included in the public repository.

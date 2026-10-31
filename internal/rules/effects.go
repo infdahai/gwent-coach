@@ -62,6 +62,12 @@ func New(c *cards.Catalog) (*Engine, error) {
 	return e, nil
 }
 
+// Effect returns an audited native-v1 definition by value. Missing entries are unsupported.
+func (e *Engine) Effect(id int) (Effect, bool) {
+	effect, ok := e.effects[id]
+	return effect, ok
+}
+
 func (e *Engine) Coverage() []Coverage {
 	result := make([]Coverage, 0, len(e.catalog.Cards))
 	for _, c := range e.catalog.Find("") {
