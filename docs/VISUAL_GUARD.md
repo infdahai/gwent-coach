@@ -1,0 +1,7 @@
+# Experimental Visual Guard
+
+The input path compares the complete current client image to the reviewed reference screenshot after cursor positioning and immediately before consuming the reference. A changed pixel, missing or invalid screenshot, capture failure, or different image dimensions refuses input. The existing focus, stop, layout, and single-use checks remain in effect. The input result still requires independent semantic confirmation.
+
+This guard is conservative and experimental. Whole-screen equality does not identify a game phase or guarantee the intended action is correct. It can reject harmless animation, timers, hover effects, and other pixel changes. Screen changes can still occur between capture and input. Reference screenshots and reports are trusted local evidence, not authenticated records.
+
+On the 2026-10-31 Windows interactive test, a click intended for the match results screen was refused with `screen changed since reference; input refused`, `not_sent`, and zero events. The screen was animated, and this test does not establish which visual change caused the refusal. This guard was not validated for live matchmaking and does not address observation-to-action latency. Before use in a match, define and validate phase-specific preconditions against representative live captures, keep refusal behavior on uncertainty, and measure end-to-end latency. Do not weaken the comparison with an unvalidated whole-image threshold.
