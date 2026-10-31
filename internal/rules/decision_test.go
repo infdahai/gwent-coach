@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"context"
 	"errors"
 	"gwentcoachmvp/internal/cards"
 	"runtime"
@@ -141,6 +142,81 @@ func TestDecisionNoLegalAndInvalidProposal(t *testing.T) {
 	in.Deadline = time.Now().Add(-time.Second)
 	if err := d.Start(in); err == nil {
 		t.Fatal("accepted expired analysis")
+	}
+}
+
+func TestDecisionTimeoutFallbackAndHiddenEquivalence(t *testing.T) {
+	d, s, in := decisionFixture(t)
+	defer d.Close()
+	// No completed analysis is needed to return a legal fast fallback.
+	if _, err := d.Poll(in); err == nil {
+		t.Fatal("unexpected proposal")
+	}
+	a, err := d.Fast(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = d.engine.Apply(s, a); err != nil {
+		t.Fatal(err)
+	}
+
+	// Altering hidden opponent and deck identities cannot alter the view or choice.
+	other := clone(s)
+	other.Cards[2].CardID = 202462
+	other.Cards[2].Power = 3
+	other.Cards[2].Armor = 1
+	v, err := other.View(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in2 := copyInput(in)
+	in2.View = v
+	if fingerprint(in) != fingerprint(in2) {
+		t.Fatal("hidden identity entered fingerprint")
+	}
+	b, err := d.Fast(in2)
+	if err != nil || a != b {
+		t.Fatalf("hidden information affected choice: %+v %v", b, err)
+	}
+
+	// An already expired deadline rejects both work and the fallback.
+	in.Deadline = time.Now().Add(-time.Nanosecond)
+	if err := d.Start(in); err == nil {
+		t.Fatal("expired work accepted")
+	}
+	if _, err := d.Fast(in); err == nil {
+		t.Fatal("expired fallback accepted")
+	}
+}
+
+func TestDecisionRestartCancellation(t *testing.T) {
+	d, _, in := decisionFixture(t)
+	defer d.Close()
+	// Model a worker that has not yet observed cancellation so restart cannot
+	// accumulate unbounded concurrent workers.
+	ctx, cancel := context.WithCancel(context.Background())
+	d.mu.Lock()
+	d.running = true
+	d.cancel = cancel
+	d.mu.Unlock()
+	if err := d.Start(in); err == nil {
+		t.Fatal("restart accepted while worker active")
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("worker not canceled")
+	}
+	d.mu.Lock()
+	d.running = false
+	d.cancel = nil
+	d.mu.Unlock()
+	if err := d.Start(in); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+	if _, err := d.Poll(in); err == nil {
+		t.Fatal("canceled result accepted")
 	}
 }
 
