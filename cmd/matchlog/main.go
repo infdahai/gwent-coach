@@ -55,7 +55,7 @@ func parse(data []byte) (report, error) {
 		return r, errors.New("empty or unterminated JSONL")
 	}
 	s := bufio.NewScanner(bytes.NewReader(data))
-	s.Buffer(make([]byte, 4096), 4<<20)
+	s.Buffer(make([]byte, 4096), 16<<20+1)
 	var previous int64 = -1
 	for s.Scan() {
 		var e event
@@ -90,9 +90,10 @@ func parse(data []byte) (report, error) {
 			}
 			r.Timings[k] = append(r.Timings[k], *v)
 		}
-		if len(e.Error) > 0 && string(e.Error) != "null" && string(e.Error) != "\"\"" {
+		if len(e.Error) > 0 && string(e.Error) != "null" {
 			r.Failures++
-			if strings.Contains(strings.ToLower(string(e.Error)), "timeout") {
+			var text string
+			if json.Unmarshal(e.Error, &text) == nil && strings.Contains(strings.ToLower(text), "timeout") {
 				r.Timeouts++
 			}
 		}
@@ -129,7 +130,7 @@ type remoteItem struct {
 }
 
 // PowerShell receives the explicit source path encoded as data, not executable syntax.
-func fetch(ctx context.Context, host, source string) ([]remoteItem, error) {
+func fetch(ctx context.Context, host, source string, consume func(remoteItem) error) error {
 	script := `$ErrorActionPreference='Stop'; $p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('` + base64.StdEncoding.EncodeToString([]byte(source)) + `')); Get-ChildItem -LiteralPath $p -Directory | ForEach-Object { $d=$_; $m=Join-Path $d.FullName 'COMPLETE'; $f=Join-Path $d.FullName 'events.jsonl'; $o=@{name=$d.Name;complete=(Test-Path -LiteralPath $m -PathType Leaf);data='';error=''}; if($o.complete) { try { $i=Get-Item -LiteralPath $f; if($i.Length -gt 16777216){throw 'log exceeds 16 MiB'}; $o.data=[Convert]::ToBase64String([IO.File]::ReadAllBytes($f)) } catch { $o.error=$_.Exception.Message } }; $o | ConvertTo-Json -Compress }`
 	words := utf16.Encode([]rune(script))
 	raw := make([]byte, len(words)*2)
@@ -137,22 +138,45 @@ func fetch(ctx context.Context, host, source string) ([]remoteItem, error) {
 		raw[2*i] = byte(w)
 		raw[2*i+1] = byte(w >> 8)
 	}
-	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, "powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(raw))
-	out, err := cmd.Output()
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", host, "powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(raw))
+	pipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("ssh retrieval: %w", err)
+		return err
 	}
-	var items []remoteItem
-	s := bufio.NewScanner(bytes.NewReader(out))
+	cmd.Stderr = os.Stderr
+	if err = cmd.Start(); err != nil {
+		return err
+	}
+	s := bufio.NewScanner(pipe)
 	s.Buffer(make([]byte, 4096), 24<<20)
+	var failures int
 	for s.Scan() {
 		var item remoteItem
 		if err := json.Unmarshal(s.Bytes(), &item); err != nil {
-			return nil, fmt.Errorf("invalid remote response: %w", err)
+			fmt.Fprintf(os.Stderr, "invalid remote response: %v\n", err)
+			failures++
+			continue
 		}
-		items = append(items, item)
+		if err := consume(item); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			failures++
+		}
 	}
-	return items, s.Err()
+	scanErr := s.Err()
+	if scanErr != nil {
+		_ = cmd.Process.Kill()
+	}
+	waitErr := cmd.Wait()
+	if scanErr != nil {
+		return scanErr
+	}
+	if waitErr != nil {
+		return fmt.Errorf("ssh retrieval: %w", waitErr)
+	}
+	if failures > 0 {
+		return fmt.Errorf("%d remote items failed", failures)
+	}
+	return nil
 }
 func importItems(dir string, items []remoteItem, output io.Writer) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -290,12 +314,9 @@ func run() error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		for {
-			request, cancel := context.WithTimeout(ctx, 30*time.Second)
-			items, err := fetch(request, *host, *source)
-			cancel()
-			if err == nil {
-				err = importItems(*dest, items, os.Stdout)
-			}
+			err := fetch(ctx, *host, *source, func(item remoteItem) error {
+				return importItems(*dest, []remoteItem{item}, os.Stdout)
+			})
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				if *watch == 0 {

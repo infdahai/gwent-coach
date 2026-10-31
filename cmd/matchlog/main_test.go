@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +33,31 @@ func TestParse(t *testing.T) {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
+func TestErrorCounts(t *testing.T) {
+	data := strings.Replace(valid, `"event_type":"observation"`, `"error":"\u0074imeout","event_type":"observation"`, 1)
+	data = strings.Replace(data, `"event_type":"match_completed"`, `"error":"","event_type":"match_completed"`, 1)
+	r, err := parse([]byte(data))
+	if err != nil || r.Failures != 2 || r.Timeouts != 1 {
+		t.Fatalf("%+v %v", r, err)
+	}
+}
+
+func TestFetchStreamsMockSSH(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\nprintf '%s\\n' '" + fmt.Sprintf(`{"name":"m1","complete":true,"data":"%s","error":""}`, base64.StdEncoding.EncodeToString([]byte(valid))) + "'\n"
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var items []remoteItem
+	if err := fetch(context.Background(), "test", `C:\test`, func(item remoteItem) error { items = append(items, item); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Name != "m1" {
+		t.Fatalf("%+v", items)
+	}
+}
+
 func TestImportAndDuplicates(t *testing.T) {
 	dir := t.TempDir()
 	item := remoteItem{Name: "m1", Complete: true, Data: base64.StdEncoding.EncodeToString([]byte(valid))}
