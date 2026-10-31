@@ -7,6 +7,7 @@ import (
 	"gwentcoachmvp/internal/cards"
 	"gwentcoachmvp/internal/rules"
 	"os"
+	"time"
 )
 
 type Log struct {
@@ -15,7 +16,7 @@ type Log struct {
 }
 
 func run() error {
-	mode := flag.String("mode", "demo", "demo, coverage, or replay")
+	mode := flag.String("mode", "demo", "demo, decision, coverage, or replay")
 	path := flag.String("db", "data/cards/14.10.0/en/cards.json", "English snapshot")
 	input := flag.String("input", "", "replay JSON file from demo stdout")
 	flag.Parse()
@@ -47,6 +48,34 @@ func run() error {
 			return err
 		}
 		return encoder.Encode(state)
+	case "decision":
+		s, err := e.Initial([2][]int{{152405, 113310}, {152405}}, [2][]int{}, 0)
+		if err != nil {
+			return err
+		}
+		v, err := s.View(0)
+		if err != nil {
+			return err
+		}
+		in := rules.DecisionInput{MatchID: "offline-demo", Phase: "turn", Player: 0, View: v, Deadline: time.Now().Add(time.Second), Candidates: []rules.Action{{Kind: "pass"}, {Kind: "play", Card: s.Cards[0].ID}}}
+		d := rules.NewDecisionService(e)
+		defer d.Close()
+		a, err := d.Fast(in)
+		if err != nil {
+			return err
+		}
+		next, _, err := e.Apply(s, a)
+		if err != nil {
+			return err
+		}
+		after, err := next.View(0)
+		if err != nil {
+			return err
+		}
+		return encoder.Encode(struct {
+			Action      rules.Action
+			PublicAfter rules.View
+		}{a, after})
 	case "demo":
 		s, err := e.Initial([2][]int{{152405, 202462, 113310}, {152405, 113301}}, [2][]int{}, 0)
 		if err != nil {
