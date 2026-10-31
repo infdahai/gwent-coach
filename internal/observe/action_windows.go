@@ -188,6 +188,22 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 	if _, err := actionWindow(a, ref); err != nil {
 		return err
 	}
+	// Compare after cursor positioning so hover changes cannot silently alter the target.
+	current, err := screenshot.Capture(int(w.Client.Left), int(w.Client.Top), int(w.Client.Right-w.Client.Left), int(w.Client.Bottom-w.Client.Top))
+	if err != nil {
+		return fmt.Errorf("capture visual precondition: %w", err)
+	}
+	reference, err := os.Open(ref.Screenshot)
+	if err != nil {
+		return fmt.Errorf("open reference screenshot: %w", err)
+	}
+	compareErr := compareReference(reference, current)
+	if err := errors.Join(compareErr, reference.Close()); err != nil {
+		return err
+	}
+	if _, err := actionWindow(a, ref); err != nil {
+		return err
+	}
 	// A reference is consumed before sending input, including uncertain outcomes.
 	claim, err := os.OpenFile(a.Reference+".input-used", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
