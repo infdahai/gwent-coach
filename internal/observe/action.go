@@ -15,7 +15,7 @@ type Action struct {
 }
 
 func (a Action) Validate() error {
-	if a.Kind != "click" && a.Kind != "hold" && a.Kind != "escape" && a.Kind != "hover" && a.Kind != "scroll-down" {
+	if a.Kind != "click" && a.Kind != "hold" && a.Kind != "escape" {
 		return fmt.Errorf("unsupported action %q", a.Kind)
 	}
 	if a.Reference == "" || a.StopFile == "" {

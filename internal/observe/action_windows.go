@@ -118,7 +118,7 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if (a.Kind == "click" || a.Kind == "hold" || a.Kind == "hover" || a.Kind == "scroll-down") && (a.X >= int(w.Client.Right-w.Client.Left) || a.Y >= int(w.Client.Bottom-w.Client.Top)) {
+	if (a.Kind == "click" || a.Kind == "hold") && (a.X >= int(w.Client.Right-w.Client.Left) || a.Y >= int(w.Client.Bottom-w.Client.Top)) {
 		return fmt.Errorf("click outside game client")
 	}
 	dir, err := os.MkdirTemp(out, "action-")
@@ -167,7 +167,7 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 		return err
 	}
 	var inputs [2]nativeInput
-	if a.Kind == "click" || a.Kind == "hold" || a.Kind == "hover" || a.Kind == "scroll-down" {
+	if a.Kind == "click" || a.Kind == "hold" {
 		x, y := w.Client.Left+int32(a.X), w.Client.Top+int32(a.Y)
 		result.Outcome = "cursor_move_attempted_requires_review"
 		r, _, err := user32.NewProc("SetCursorPos").Call(uintptr(x), uintptr(y))
@@ -232,11 +232,6 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 	if a.Kind != "escape" {
 		result.Outcome = "cursor_moved_requires_review"
 	}
-	if a.Kind == "hover" {
-		result.Outcome = "unknown_requires_review"
-		time.Sleep(700 * time.Millisecond)
-		return Run(dir, logger)
-	}
 	if _, err := actionWindow(a, ref); err != nil {
 		return err
 	}
@@ -256,20 +251,6 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 		if root != w.Handle {
 			return fmt.Errorf("target covered before delivery")
 		}
-	}
-	if a.Kind == "scroll-down" {
-		mi := (*mouseInput)(unsafe.Pointer(&inputs[0].Data[0]))
-		mi.Flags = 0x0800
-		delta := int32(-360)
-		mi.Data = uint32(delta)
-		n, _, err := user32.NewProc("SendInput").Call(1, uintptr(unsafe.Pointer(&inputs[0])), unsafe.Sizeof(inputs[0]))
-		result.Sent = uint32(n)
-		result.Outcome = "unknown_requires_review"
-		if n != 1 {
-			return fmt.Errorf("wheel input failed; do not replay: %v", err)
-		}
-		time.Sleep(700 * time.Millisecond)
-		return Run(dir, logger)
 	}
 	if a.Kind == "hold" {
 		n, _, err := user32.NewProc("SendInput").Call(1, uintptr(unsafe.Pointer(&inputs[0])), unsafe.Sizeof(inputs[0]))
