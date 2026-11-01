@@ -216,8 +216,20 @@ func (j *ActionJournal) Result(snapshot Snapshot, observation SemanticObservatio
 		return fmt.Errorf("unresolved action or missing result observation")
 	}
 	result := "unknown"
-	if observation.View.Finished {
-		switch observation.View.Winner {
+	finished, winner := observation.View.Finished, observation.View.Winner
+	var visible any = observation.View
+	if observation.PartialResult != nil {
+		finished, winner = observation.PartialResult.Finished, observation.PartialResult.Winner
+		visible = observation.PartialResult
+		if observation.Eligible || observation.CalibrationID == "" || snapshot.Source != observation.Source || snapshot.Phase != observation.Phase || observation.MatchID != j.matchID || observation.Player < 0 || observation.Player > 1 || !finished || winner < -1 || winner > 1 {
+			return fmt.Errorf("invalid partial result observation")
+		}
+		if err := matchlog.ValidateConfirmation(j.matchID, observation.Source, observation.CapturedAt, observation.Frames, time.Unix(0, 0)); err != nil {
+			return err
+		}
+	}
+	if finished {
+		switch winner {
 		case observation.Player:
 			result = "win"
 		case 1 - observation.Player:
@@ -227,7 +239,7 @@ func (j *ActionJournal) Result(snapshot Snapshot, observation SemanticObservatio
 		}
 	}
 	captured := observation.CapturedAt.UTC().Format(time.RFC3339Nano)
-	if err := j.writer.AppendDurable(matchlog.Event{EventType: "result_observed", StateVersion: &snapshot.Version, Phase: &observation.Phase, FramePath: &observation.Source, VisibleState: observation.View, Result: &result, CapturedAt: &captured, ConfirmationFrames: append([]matchlog.FrameEvidence(nil), observation.Frames...), CalibrationID: observation.CalibrationID}); err != nil {
+	if err := j.writer.AppendDurable(matchlog.Event{EventType: "result_observed", StateVersion: &snapshot.Version, Phase: &observation.Phase, FramePath: &observation.Source, VisibleState: visible, Result: &result, CapturedAt: &captured, ConfirmationFrames: append([]matchlog.FrameEvidence(nil), observation.Frames...), CalibrationID: observation.CalibrationID}); err != nil {
 		return err
 	}
 	j.result = &result

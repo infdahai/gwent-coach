@@ -13,15 +13,18 @@ import (
 	"gwentcoachmvp/internal/stateestimate"
 )
 
-// SemanticFromEvidence maps only a complete independently estimated view.
-// Partial facts never become a zero-valued rules.View or action confirmation.
+// SemanticFromEvidence maps a complete view or an independently observed
+// terminal outcome. A partial result cannot authorize or confirm an action.
 func SemanticFromEvidence(pair [2]stateestimate.Evidence, now time.Time, maxAge time.Duration) (SemanticObservation, error) {
 	estimated, err := stateestimate.Estimate(pair, now, maxAge)
 	if err != nil {
 		return SemanticObservation{}, err
 	}
 	if estimated.View == nil {
-		return SemanticObservation{}, fmt.Errorf("%w: missing %v", ErrUnstableVisual, estimated.Missing)
+		if !estimated.ReadyFor(stateestimate.TaskResult) {
+			return SemanticObservation{}, fmt.Errorf("%w: missing %v", ErrUnstableVisual, estimated.Missing)
+		}
+		return SemanticObservation{Source: estimated.Frame.ID, MatchID: estimated.Frame.MatchID, Phase: estimated.Stage, Player: estimated.Frame.Player, CapturedAt: estimated.Frame.CapturedAt, Result: true, PartialResult: estimated.Facts.Outcome, Frames: []matchlog.FrameEvidence{{Source: pair[0].Frame.ID, MatchID: pair[0].Frame.MatchID, CapturedAt: pair[0].Frame.CapturedAt}, {Source: pair[1].Frame.ID, MatchID: pair[1].Frame.MatchID, CapturedAt: pair[1].Frame.CapturedAt}}, CalibrationID: estimated.CalibrationID, StateKey: estimated.StateKey}, nil
 	}
 	return SemanticObservation{Source: estimated.Frame.ID, MatchID: estimated.Frame.MatchID, Phase: estimated.Stage, Player: estimated.Frame.Player, CapturedAt: estimated.Frame.CapturedAt, View: *estimated.View, HandOrder: append([]string(nil), estimated.Facts.Cards.HandOrder...), Eligible: estimated.Eligible, Result: estimated.View.Finished, Frames: []matchlog.FrameEvidence{{Source: pair[0].Frame.ID, MatchID: pair[0].Frame.MatchID, CapturedAt: pair[0].Frame.CapturedAt}, {Source: pair[1].Frame.ID, MatchID: pair[1].Frame.MatchID, CapturedAt: pair[1].Frame.CapturedAt}}, CalibrationID: estimated.CalibrationID, StateKey: estimated.StateKey}, nil
 }

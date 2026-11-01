@@ -165,17 +165,7 @@ func (s TrainingSession) runOne(ctx context.Context, id string, writer *matchlog
 		if !observation.Result || observation.MatchID != id || journal.Pending() != nil || journal.result == nil {
 			return fmt.Errorf("match returned without confirmed terminal observation")
 		}
-		result = "unknown"
-		if observation.View.Finished {
-			switch observation.View.Winner {
-			case observation.Player:
-				result = "win"
-			case 1 - observation.Player:
-				result = "loss"
-			case -1:
-				result = "draw"
-			}
-		}
+		result = *journal.result
 		// LocalLoop owns result_observed; callbacks must run that loop with this journal.
 	}
 	if result == "unknown" {

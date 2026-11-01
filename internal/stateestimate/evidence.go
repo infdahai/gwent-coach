@@ -93,9 +93,7 @@ type Evidence struct {
 type Task string
 
 const (
-	TaskStage    Task = "stage"
-	TaskResult   Task = "result"
-	TaskDecision Task = "decision"
+	TaskResult Task = "result"
 )
 
 // ReadyFor reports whether this observation supports the requested task. A
@@ -103,12 +101,8 @@ const (
 // alone never implies a result. Unknown tasks are not ready.
 func (o Observation) ReadyFor(task Task) bool {
 	switch task {
-	case TaskStage:
-		return o.Stage != "" && o.Stage != "unknown"
 	case TaskResult:
 		return o.Facts.Outcome != nil && o.Facts.Outcome.Finished && o.Facts.Outcome.Winner >= -1 && o.Facts.Outcome.Winner <= 1
-	case TaskDecision:
-		return o.View != nil && o.Eligible
 	default:
 		return false
 	}

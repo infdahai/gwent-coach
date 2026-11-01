@@ -58,11 +58,12 @@ func TestPartialTerminalEvidenceIsReadOnly(t *testing.T) {
 	}
 	pair, now := readEvidencePair(t, reader, frames[0])
 	observation, err := stateestimate.Estimate(pair, now, time.Second)
-	if err != nil || !observation.ReadyFor(stateestimate.TaskResult) || observation.ReadyFor(stateestimate.TaskDecision) || observation.View != nil {
+	if err != nil || !observation.ReadyFor(stateestimate.TaskResult) || observation.Eligible || observation.View != nil {
 		t.Fatalf("partial result: %+v, %v", observation, err)
 	}
-	if _, err := SemanticFromEvidence(pair, now, time.Second); !errors.Is(err, ErrUnstableVisual) {
-		t.Fatalf("partial result reached action path: %v", err)
+	semantic, err := SemanticFromEvidence(pair, now, time.Second)
+	if err != nil || !semantic.Result || semantic.PartialResult == nil || semantic.Eligible {
+		t.Fatalf("partial result mapping: %+v, %v", semantic, err)
 	}
 }
 
