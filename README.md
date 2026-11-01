@@ -21,7 +21,7 @@ The pure Go `native-v1` offline engine implements six pinned card abilities, arm
 
 See [architecture, evidence and next coverage steps](docs/NATIVE_RULES.md). Round ties and transition constraints are explicit experimental profile choices, not verified seasonal rules. The simulator holds full information, while policy views hide opponent hands and deck order. Live partial-state tracking, OCR, full-card effects, search, self-play tuning and reinforcement learning are not implemented. Tests intentionally fail with a missing-file error until snapshots are imported; no network access occurs during tests.
 
-Bounded Windows observation sampling supports reduced-resolution JPEG and per-frame timing. See [training autoplay status and measured sampling results](docs/TRAINING_AUTOPLAY.md). Autonomous match acceptance remains unmet; sampling does not play the game.
+The [Windows read-only collection demo](docs/READONLY_COLLECTION.md) saves bounded frame captures and untrusted numeric candidates. See also [training autoplay status and measured sampling results](docs/TRAINING_AUTOPLAY.md). Autonomous match acceptance remains unmet; sampling does not play the game.
 
 See [offline decision prototype](docs/DECISIONS.md) for the public-view decision API, demo, and current one-move limitations.
 
