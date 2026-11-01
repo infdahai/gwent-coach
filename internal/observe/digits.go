@@ -3,7 +3,6 @@ package observe
 import (
 	"fmt"
 	"image"
-	"math/bits"
 )
 
 // DigitCalibration binds a numeric ROI to foreground brightness and glyph
@@ -16,8 +15,8 @@ type DigitCalibration struct {
 	MaxDistance   int
 	MinGap        int
 	Templates     map[int][]string
-	// CandidateOnly must be explicitly set: sparse glyph samples are not
-	// sufficient evidence for gameplay or for detecting partial occlusion.
+	// CandidateOnly must be explicitly set: template matches are not sufficient
+	// evidence for gameplay or for detecting partial occlusion.
 	CandidateOnly bool
 }
 
@@ -44,6 +43,8 @@ func (c DigitCalibration) validate(bounds image.Rectangle) error {
 }
 
 // ReadDigits returns false for missing, ambiguous, or out-of-calibration pixels.
+// MaxDistance is the sum of per-cell foreground mismatch fractions; MinGap
+// is the minimum difference between the best and second-best digit distances.
 func (c DigitCalibration) ReadDigits(img image.Image) (int, bool) {
 	if img == nil || c.validate(img.Bounds()) != nil {
 		return 0, false
@@ -93,27 +94,38 @@ func (c DigitCalibration) ReadDigits(img image.Image) (int, bool) {
 		if span[1]-span[0] < c.Width || ymax-ymin < c.Height {
 			return 0, false
 		}
-		var mask uint64
+		// Compare every pixel, giving each normalized cell equal weight even
+		// when the glyph dimensions are not multiples of the template size.
+		coverage := make([]float64, c.Width*c.Height)
 		for y := 0; y < c.Height; y++ {
+			y0 := ymin + y*(ymax-ymin)/c.Height
+			y1 := ymin + (y+1)*(ymax-ymin)/c.Height
 			for x := 0; x < c.Width; x++ {
-				px := span[0] + (2*x+1)*(span[1]-span[0])/(2*c.Width)
-				py := ymin + (2*y+1)*(ymax-ymin)/(2*c.Height)
-				if foreground(px, py) {
-					mask |= uint64(1) << uint(y*c.Width+x)
-				}
-			}
-		}
-		best, second, winner := 65, 65, -1
-		for digit, samples := range c.Templates {
-			distance := 65
-			for _, s := range samples {
-				var template uint64
-				for i, b := range s {
-					if b == '1' {
-						template |= uint64(1) << uint(i)
+				x0 := span[0] + x*(span[1]-span[0])/c.Width
+				x1 := span[0] + (x+1)*(span[1]-span[0])/c.Width
+				count := 0
+				for py := y0; py < y1; py++ {
+					for px := x0; px < x1; px++ {
+						if foreground(px, py) {
+							count++
+						}
 					}
 				}
-				d := bits.OnesCount64(mask ^ template)
+				coverage[y*c.Width+x] = float64(count) / float64((x1-x0)*(y1-y0))
+			}
+		}
+		best, second, winner := float64(c.Width*c.Height+1), float64(c.Width*c.Height+1), -1
+		for digit, samples := range c.Templates {
+			distance := float64(c.Width*c.Height + 1)
+			for _, s := range samples {
+				d := 0.0
+				for i, b := range s {
+					if b == '1' {
+						d += 1 - coverage[i]
+					} else {
+						d += coverage[i]
+					}
+				}
 				if d < distance {
 					distance = d
 				}
@@ -124,7 +136,7 @@ func (c DigitCalibration) ReadDigits(img image.Image) (int, bool) {
 				second = distance
 			}
 		}
-		if best > c.MaxDistance || second-best < c.MinGap {
+		if best > float64(c.MaxDistance) || second-best < float64(c.MinGap) {
 			return 0, false
 		}
 		value = value*10 + winner
