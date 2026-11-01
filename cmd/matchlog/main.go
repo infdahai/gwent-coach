@@ -24,6 +24,8 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf16"
+
+	"gwentcoachmvp/internal/matchlog"
 )
 
 type event struct {
@@ -124,10 +126,11 @@ func parse(data []byte) (report, error) {
 func (r report) IDMismatch(id string) bool { return r.MatchID != "" && r.MatchID != id }
 
 type remoteItem struct {
-	Name     string `json:"name"`
-	Complete bool   `json:"complete"`
-	Data     string `json:"data"`
-	Error    string `json:"error"`
+	Name     string  `json:"name"`
+	Complete bool    `json:"complete"`
+	Data     string  `json:"data"`
+	Training *string `json:"training"`
+	Error    string  `json:"error"`
 }
 
 type progressReader struct {
@@ -156,7 +159,7 @@ func fetch(ctx context.Context, host, source string, timeout time.Duration, cons
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	script := `$ErrorActionPreference='Stop'; $p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('` + base64.StdEncoding.EncodeToString([]byte(source)) + `')); Get-ChildItem -LiteralPath $p -Directory | ForEach-Object { $d=$_; $m=Join-Path $d.FullName 'COMPLETE'; $f=Join-Path $d.FullName 'events.jsonl'; $o=@{name=$d.Name;complete=(Test-Path -LiteralPath $m -PathType Leaf);data='';error=''}; if($o.complete) { try { $i=Get-Item -LiteralPath $f; if($i.Length -gt 16777216){throw 'log exceeds 16 MiB'}; $o.data=[Convert]::ToBase64String([IO.File]::ReadAllBytes($f)) } catch { $o.error=$_.Exception.Message } }; $o | ConvertTo-Json -Compress }`
+	script := `$ErrorActionPreference='Stop'; $p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('` + base64.StdEncoding.EncodeToString([]byte(source)) + `')); Get-ChildItem -LiteralPath $p -Directory | ForEach-Object { $d=$_; $m=Join-Path $d.FullName 'COMPLETE'; $f=Join-Path $d.FullName 'events.jsonl'; $t=Join-Path $d.FullName 'training.jsonl'; $o=@{name=$d.Name;complete=(Test-Path -LiteralPath $m -PathType Leaf);data='';training=$null;error=''}; if($o.complete) { try { $i=Get-Item -LiteralPath $f; if($i.Length -gt 16777216){throw 'log exceeds 16 MiB'}; $o.data=[Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); if(Test-Path -LiteralPath $t -PathType Leaf){ $i=Get-Item -LiteralPath $t; if($i.Length -gt 16777216){throw 'training data exceeds 16 MiB'}; $o.training=[Convert]::ToBase64String([IO.File]::ReadAllBytes($t)) } } catch { $o.error=$_.Exception.Message } }; $o | ConvertTo-Json -Compress }`
 	words := utf16.Encode([]rune(script))
 	raw := make([]byte, len(words)*2)
 	for i, w := range words {
@@ -211,7 +214,7 @@ func fetch(ctx context.Context, host, source string, timeout time.Duration, cons
 		}
 	}()
 	s := bufio.NewScanner(progressReader{Reader: pipe, progress: progress, latest: &latest, start: start})
-	s.Buffer(make([]byte, 4096), 24<<20)
+	s.Buffer(make([]byte, 4096), 48<<20)
 	var failures int
 	for s.Scan() {
 		var item remoteItem
@@ -278,6 +281,16 @@ func importItems(dir string, items []remoteItem, output io.Writer) error {
 			failures++
 			continue
 		}
+		if item.Training != nil {
+			if err := importTraining(dir, item, data); err != nil {
+				fmt.Fprintf(output, "%s: %v\n", item.Name, err)
+				failures++
+				continue
+			}
+			sum := sha256.Sum256(data)
+			fmt.Fprintf(output, "%s: imported sealed directory events_sha256=%s\n", item.Name, hex.EncodeToString(sum[:]))
+			continue
+		}
 		path := filepath.Join(dir, item.Name+".jsonl")
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if errors.Is(err, os.ErrExist) {
@@ -319,6 +332,51 @@ func importItems(dir string, items []remoteItem, output io.Writer) error {
 	}
 	return nil
 }
+func importTraining(root string, item remoteItem, events []byte) error {
+	training, err := base64.StdEncoding.DecodeString(*item.Training)
+	if err != nil {
+		return fmt.Errorf("invalid training encoding: %w", err)
+	}
+	staging, err := os.MkdirTemp(root, ".match-import-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+	if err = os.WriteFile(filepath.Join(staging, "events.jsonl"), events, 0600); err != nil {
+		return err
+	}
+	parsed, err := matchlog.Read(filepath.Join(staging, "events.jsonl"))
+	if err != nil {
+		return err
+	}
+	if err = matchlog.ExportConfirmedTraining(filepath.Join(staging, "training.jsonl"), parsed); err != nil {
+		return err
+	}
+	derived, err := os.ReadFile(filepath.Join(staging, "training.jsonl"))
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(derived, training) {
+		return fmt.Errorf("training export differs from confirmed events")
+	}
+	if err = os.WriteFile(filepath.Join(staging, "COMPLETE"), nil, 0600); err != nil {
+		return err
+	}
+	dest := filepath.Join(root, item.Name)
+	if _, err = os.Lstat(dest); err == nil {
+		for name, want := range map[string][]byte{"events.jsonl": events, "training.jsonl": training, "COMPLETE": {}} {
+			got, e := os.ReadFile(filepath.Join(dest, name))
+			if e != nil || !bytes.Equal(got, want) {
+				return fmt.Errorf("conflicting existing sealed match")
+			}
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(staging, dest)
+}
+
 func analyze(paths []string, out io.Writer) error {
 	sort.Strings(paths)
 	seen := map[string][]byte{}

@@ -72,6 +72,27 @@ func TestFetchStalledSSH(t *testing.T) {
 	}
 }
 
+func TestImportSealedTraining(t *testing.T) {
+	root := t.TempDir()
+	empty := ""
+	item := remoteItem{Name: "m1", Complete: true, Data: base64.StdEncoding.EncodeToString([]byte(valid)), Training: &empty}
+	var out bytes.Buffer
+	if err := importItems(root, []remoteItem{item, item}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for name, expected := range map[string]string{"events.jsonl": valid, "training.jsonl": "", "COMPLETE": ""} {
+		got, err := os.ReadFile(filepath.Join(root, "m1", name))
+		if err != nil || string(got) != expected {
+			t.Fatalf("%s: %q %v", name, got, err)
+		}
+	}
+	bad := base64.StdEncoding.EncodeToString([]byte("{}\n"))
+	item.Training = &bad
+	if err := importItems(root, []remoteItem{item}, &out); err == nil {
+		t.Fatal("mismatched training export accepted")
+	}
+}
+
 func TestImportAndDuplicates(t *testing.T) {
 	dir := t.TempDir()
 	item := remoteItem{Name: "m1", Complete: true, Data: base64.StdEncoding.EncodeToString([]byte(valid))}
