@@ -45,3 +45,32 @@ The collector accepts 1–1,200 frames per invocation and intervals of at least 
 On the Mac, copy a run's `recognition.jsonl` locally and summarize it with `go run ./cmd/collection-analysis /path/to/recognition.jsonl`. The JSON output counts frames, candidate values, unknown frames, and reported consecutive candidate agreements for each scalar. It retains the `unverified_candidate_not_for_actions` trust marker; agreement and counts do not validate recognition. The command reads only the JSONL, not the referenced screenshots, and does not train a model or report match results.
 
 Each JSONL line has `captured_at`, `reference`, `scalars`, `unknown`, and the trust marker `unverified_candidate_not_for_actions`. `agreed`, when present, records agreement between consecutive candidate readings; it does not establish correctness. Menus, occlusion, and similar-looking glyphs can yield false values. These candidates are rejected by the gameplay evidence reader and are not connected to `Facts.Totals` or action selection. Validate frames manually before using them as research data; the demo does not provide reliable score recognition or autonomous gameplay.
+
+## Offline hand annotation and evaluation
+
+Keep screenshots, annotations, reports, and outputs in a private local directory outside the repository. Open a saved JPEG or PNG in an image viewer that shows pixel coordinates. For each visible hand card, record the **art region** (the same region used by the calibrated scanner, not the full card outline) in native image pixels. Use x and y for its top-left corner and width and height for its extent. Record the catalog card ID if known, or 0 if uncertain. Include every visible card, even uncertain ones; use an empty `cards` array for a deliberately reviewed empty hand. Label each frame independently, including both frames of a scan if evaluating both. Do not copy predictions into labels without independent review.
+
+Save an annotation as JSON, substituting your own paths, report reference, image dimensions and observations:
+
+```json
+{
+  "report": "frame-1-report.json",
+  "image": "/private/run/frame-1.jpg",
+  "width": 1920,
+  "height": 1080,
+  "cards": [
+    {"art": {"x": 600, "y": 850, "width": 90, "height": 110}, "card_id": 152405},
+    {"art": {"x": 700, "y": 850, "width": 90, "height": 110}, "card_id": 0}
+  ]
+}
+```
+
+`report` is an exact identifier, not automatically resolved from the image; make sure it identifies the actual annotated screenshot. A hand-scan JSON line produced on Windows can be saved as a single JSON file. Alternatively, run the existing scanner offline against two saved frames using the same `HandScanConfig`, card database and template file described in [card lookup](CARD_LOOKUP.md). Database and template paths are relative to the config file. The two report identifiers are supplied by you and must correspond to the actual images:
+
+```sh
+go run ./cmd/hand-scan-offline /private/hand-config.json /private/frame-1.jpg frame-1-report.json /private/frame-2.jpg frame-2-report.json > /private/scan.json
+go run ./cmd/hand-eval /private/annotation.json /private/scan.json
+```
+
+The evaluator checks image dimensions and requires the annotation report to match either scan reference. It pairs art rectangles one-to-one at intersection over union >= 0.5, maximizing matched count and then total overlap. It reports unmatched labels and regions, and identity agreements, disagreements, unknown predictions and unknown labels for matched pairs. The scanner uses configured regions; these counts do not measure an automatic card locator. A scan candidate reflects agreement across both frames: check that the hand remains unchanged, and annotate and evaluate both frames if using both as evidence. Paths and reference strings are not proof of image provenance. Labels and predictions remain unverified research data, not game state or action authority. Report sample selection, unknowns and limitations; do not claim real-world accuracy from synthetic tests or template self-matches. Use independently labeled held-out images for meaningful evaluation.
+
