@@ -79,6 +79,19 @@ func TestRunEvaluatesLabelsAndUnknown(t *testing.T) {
 	if err := run([]string{model, labels}, &bytes.Buffer{}); err == nil {
 		t.Fatal("duplicate image accepted")
 	}
+	for name, link := range map[string]func(string, string) error{"symlink": os.Symlink, "hardlink": os.Link} {
+		t.Run(name, func(t *testing.T) {
+			alias := filepath.Join(dir, name+".png")
+			if err := link(filepath.Join(dir, "present.png"), alias); err != nil {
+				t.Skipf("cannot create %s: %v", name, err)
+			}
+			labels := write(name+".json", manifest{Samples: []sample{{"present.png", "present"}, {alias, "absent"}}})
+			var out bytes.Buffer
+			if err := run([]string{model, labels}, &out); err == nil || out.Len() != 0 {
+				t.Fatalf("alias accepted or partial report emitted: err=%v output=%s", err, out.String())
+			}
+		})
+	}
 	labels = write("labels.json", manifest{Samples: []sample{{"present.png", "present"}, {"absent.png", "absent"}}})
 	var out bytes.Buffer
 	if err := run([]string{model, labels}, &out); err != nil {

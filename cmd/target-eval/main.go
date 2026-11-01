@@ -76,7 +76,7 @@ func run(args []string, out io.Writer) error {
 		return fmt.Errorf("labels require samples")
 	}
 	r := report{Status: "unvalidated_candidates_no_input", Results: make([]result, 0, len(labels.Samples))}
-	seen := map[string]bool{}
+	var seen []os.FileInfo
 	for _, s := range labels.Samples {
 		if s.Image == "" || (s.Label != "present" && s.Label != "absent") {
 			return fmt.Errorf("each sample requires an image and present or absent label")
@@ -89,14 +89,22 @@ func run(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if seen[path] {
-			return fmt.Errorf("duplicate image: %s", s.Image)
-		}
-		seen[path] = true
 		imgFile, err := os.Open(path)
 		if err != nil {
 			return fmt.Errorf("image %s: %w", s.Image, err)
 		}
+		info, err := imgFile.Stat()
+		if err != nil {
+			imgFile.Close()
+			return fmt.Errorf("image %s: %w", s.Image, err)
+		}
+		for _, previous := range seen {
+			if os.SameFile(previous, info) {
+				imgFile.Close()
+				return fmt.Errorf("duplicate image: %s", s.Image)
+			}
+		}
+		seen = append(seen, info)
 		img, _, err := image.Decode(imgFile)
 		imgFile.Close()
 		if err != nil {
