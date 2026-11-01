@@ -23,6 +23,7 @@ func main() {
 	interval := flag.Duration("interval", time.Second, "minimum interval between observation starts")
 	width := flag.Int("max-width", 0, "observation image maximum width; zero keeps native pixels")
 	quality := flag.Int("jpeg-quality", 0, "JPEG quality 1-100; zero uses PNG")
+	timings := flag.Bool("capture-timings", false, "include capture, encoding and image write timings in observation reports")
 	model := flag.String("phase-model", "", "local validated UI phase model")
 	modelSHA := flag.String("phase-model-sha256", "", "expected SHA-256 of phase model")
 	labels := flag.String("build-phases", "", "label manifest to compile into -phase-model")
@@ -50,6 +51,10 @@ func main() {
 	inspectRecovery := flag.String("inspect-navigation-recovery", "", "inspect an events.jsonl file without modifying it or sending input")
 	claim := flag.String("inspect-navigation-claim", "", "optional navigation.claim path to inspect read-only")
 	flag.Parse()
+	if *timings && (*collect != "" || *nativeSession != "" || *nativeLoop != "" || *guardProbe != "" || *hoverAnnotate != "" || *nativeSlice != "" || *handScan != "" || *training || *navigate || *action != "") {
+		fmt.Fprintln(os.Stderr, "capture timings are available only for observation sampling")
+		os.Exit(1)
+	}
 	if *claim != "" && *inspectRecovery == "" {
 		fmt.Fprintln(os.Stderr, "claim inspection requires -inspect-navigation-recovery")
 		os.Exit(1)
@@ -180,7 +185,7 @@ func main() {
 	} else if *navigate {
 		runErr = observe.Navigate(*out, logger, observe.Navigation{ModelPath: *model, ModelSHA256: *modelSHA, PlanPath: *navigationPlan, PlanSHA256: *navigationPlanSHA, StopFile: *stopFile, StateDir: *state, Steps: *steps})
 	} else if *action == "" {
-		runErr = observe.Sample(*out, logger, observe.Sampling{Count: *count, Interval: *interval, MaxWidth: *width, JPEGQuality: *quality, StopFile: *stopFile})
+		runErr = observe.Sample(*out, logger, observe.Sampling{Count: *count, Interval: *interval, MaxWidth: *width, JPEGQuality: *quality, StopFile: *stopFile, Timings: *timings})
 	} else {
 		runErr = observe.Execute(*out, logger, observe.Action{Kind: *action, X: *x, Y: *y, Reference: *reference, StopFile: *stopFile})
 	}

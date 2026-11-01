@@ -18,6 +18,20 @@ type Sampling struct {
 	MaxWidth    int
 	JPEGQuality int
 	StopFile    string
+	Timings     bool
+}
+
+// timedWriter measures time spent in the underlying Write calls, including errors.
+type timedWriter struct {
+	writer   io.Writer
+	duration time.Duration
+}
+
+func (w *timedWriter) Write(p []byte) (int, error) {
+	started := time.Now()
+	n, err := w.writer.Write(p)
+	w.duration += time.Since(started)
+	return n, err
 }
 
 func (s Sampling) Validate() error {
