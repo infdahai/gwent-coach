@@ -124,31 +124,43 @@ type PhaseLabels struct {
 }
 
 func BuildPhases(labelsPath, out string) error {
+	m, err := buildPhaseModel(labelsPath)
+	if err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(out, b, 0600)
+}
+
+func buildPhaseModel(labelsPath string) (*PhaseModel, error) {
 	b, e := os.ReadFile(labelsPath)
 	if e != nil {
-		return e
+		return nil, e
 	}
 	var labels PhaseLabels
 	if e = json.Unmarshal(b, &labels); e != nil {
-		return e
+		return nil, e
 	}
 	m := PhaseModel{Width: labels.Width, Height: labels.Height}
 	if m.Width < 1 || m.Height < 1 {
-		return fmt.Errorf("invalid label dimensions")
+		return nil, fmt.Errorf("invalid label dimensions")
 	}
 	for _, s := range labels.Samples {
 		img, e := readImage(filepath.Join(filepath.Dir(labelsPath), s.Image))
 		if e != nil {
-			return e
+			return nil, e
 		}
 		if img.Bounds().Dx()*m.Height != img.Bounds().Dy()*m.Width {
-			return fmt.Errorf("label image aspect ratio mismatch: %s", s.Image)
+			return nil, fmt.Errorf("label image aspect ratio mismatch: %s", s.Image)
 		}
 		p := Phase{Name: s.Name, Anchors: s.Anchors}
 		for i := range p.Anchors {
 			a := &p.Anchors[i]
 			if a.X < 0 || a.Y < 0 || a.Width < 16 || a.Height < 8 || a.X+a.Width > m.Width || a.Y+a.Height > m.Height {
-				return fmt.Errorf("invalid label ROI")
+				return nil, fmt.Errorf("invalid label ROI")
 			}
 			if a.Feature == "" {
 				a.Pixels = AnchorPixels(img, *a, m.Width, m.Height)
@@ -167,11 +179,7 @@ func BuildPhases(labelsPath, out string) error {
 		}
 	}
 	if e = m.Validate(); e != nil {
-		return e
+		return nil, e
 	}
-	b, e = json.MarshalIndent(m, "", "  ")
-	if e != nil {
-		return e
-	}
-	return os.WriteFile(out, b, 0600)
+	return &m, nil
 }

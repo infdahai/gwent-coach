@@ -27,6 +27,8 @@ func main() {
 	model := flag.String("phase-model", "", "local validated UI phase model")
 	modelSHA := flag.String("phase-model-sha256", "", "expected SHA-256 of phase model")
 	labels := flag.String("build-phases", "", "label manifest to compile into -phase-model")
+	evidenceBuild := flag.String("build-evidence", "", "offline evidence builder manifest; create calibration at -evidence-output")
+	evidenceOutput := flag.String("evidence-output", "", "new evidence calibration output file")
 	diagnosePhase := flag.String("diagnose-phase", "", "image for per-anchor phase diagnostics")
 	recognize := flag.String("recognize", "", "image to classify without input")
 	replay := flag.String("replay-phases", "", "labelled frame manifest for observation-only JSONL replay")
@@ -65,6 +67,17 @@ func main() {
 			err = json.NewEncoder(os.Stdout).Encode(report)
 		}
 		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *evidenceBuild != "" {
+		if *evidenceOutput == "" {
+			fmt.Fprintln(os.Stderr, "-build-evidence requires -evidence-output")
+			os.Exit(1)
+		}
+		if err := observe.BuildEvidence(*evidenceBuild, *evidenceOutput); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
