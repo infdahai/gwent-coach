@@ -21,6 +21,8 @@ type Event struct {
 	SchemaVersion      int                `json:"schema_version"`
 	MatchID            string             `json:"match_id"`
 	SessionID          string             `json:"session_id,omitempty"`
+	PolicyVersion      string             `json:"policy_version,omitempty"`
+	CalibrationID      string             `json:"calibration_id,omitempty"`
 	Sequence           uint64             `json:"sequence"`
 	UTC                string             `json:"utc"`
 	ElapsedNS          int64              `json:"elapsed_ns"`

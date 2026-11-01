@@ -37,6 +37,7 @@ type NativeInteraction struct {
 
 type NativeLoopConfig struct {
 	EvidenceCalibrationPath, EvidenceCalibrationSHA256                 string
+	PolicyArtifactPath, PolicyArtifactSHA256                           string
 	ResumeJournal                                                      bool
 	LegacyScenarioStates                                               bool
 	Interactions                                                       map[string]NativeInteraction

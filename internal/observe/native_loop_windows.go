@@ -287,10 +287,28 @@ func runNativeLoopAttempt(ctx context.Context, out string, logger *log.Logger, c
 		adapter.evidenceReader = evidenceReader
 	}
 	service := rules.NewEvaluator(engine)
-	policy, err := NewStrategyPolicy(service, selected, 5*time.Second)
+	policyPath := cfg.PolicyArtifactPath
+	if policyPath != "" {
+		policyPath = resolve(policyPath)
+	}
+	if journal != nil && journal.Pending() != nil && cfg.PolicyArtifactPath != "" {
+		return fmt.Errorf("cannot verify persisted policy version for resumed candidate match")
+	}
+	selectedPolicy, selectErr := selectMatchPolicy(policyPath, cfg.PolicyArtifactSHA256, selected)
+	if selectErr != nil {
+		logger.Printf("policy candidate rejected; using baseline: %v", selectErr)
+	}
+	logger.Printf("match policy version=%s", selectedPolicy.Version)
+	if journal != nil && journal.Pending() == nil {
+		if err := journal.writer.AppendDurable(matchlog.Event{EventType: "policy_selected", PolicyVersion: selectedPolicy.Version}); err != nil {
+			return err
+		}
+	}
+	policy, err := NewStrategyPolicy(service, selectedPolicy.Policy, 5*time.Second)
 	if err != nil {
 		return err
 	}
+	policy.version = selectedPolicy.Version
 	defer policy.Close()
 	if journal.Pending() != nil {
 		if err := json.Unmarshal(journal.Pending().Snapshot.State, &adapter.before); err != nil {

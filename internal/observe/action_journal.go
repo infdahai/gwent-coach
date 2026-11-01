@@ -226,7 +226,8 @@ func (j *ActionJournal) Result(snapshot Snapshot, observation SemanticObservatio
 			result = "draw"
 		}
 	}
-	if err := j.writer.AppendDurable(matchlog.Event{EventType: "result_observed", StateVersion: &snapshot.Version, Phase: &observation.Phase, FramePath: &observation.Source, VisibleState: observation.View, Result: &result}); err != nil {
+	captured := observation.CapturedAt.UTC().Format(time.RFC3339Nano)
+	if err := j.writer.AppendDurable(matchlog.Event{EventType: "result_observed", StateVersion: &snapshot.Version, Phase: &observation.Phase, FramePath: &observation.Source, VisibleState: observation.View, Result: &result, CapturedAt: &captured, ConfirmationFrames: append([]matchlog.FrameEvidence(nil), observation.Frames...), CalibrationID: observation.CalibrationID}); err != nil {
 		return err
 	}
 	j.result = &result

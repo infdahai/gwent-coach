@@ -39,6 +39,7 @@ type StrategyPolicy struct {
 	policy      strategy.Policy
 	service     *strategy.Service
 	reserve     time.Duration
+	version     string
 	match       string
 	observation strategy.Observation
 	input       []byte
@@ -75,7 +76,7 @@ func (p *StrategyPolicy) Start(in rules.DecisionInput, version uint64) error {
 		if p.service != nil {
 			p.service.Close()
 		}
-		p.service = strategy.New(p.policy)
+		p.service = strategy.NewVersioned(p.policy, p.version)
 		p.match = in.MatchID
 	}
 	ordered := rules.OrderCandidates(in)
@@ -105,7 +106,7 @@ func (p *StrategyPolicy) Start(in rules.DecisionInput, version uint64) error {
 	if err != nil {
 		return err
 	}
-	o := strategy.Observation{MatchID: in.MatchID, Revision: version, Deadline: in.Deadline, State: state, Candidates: ids}
+	o := strategy.Observation{MatchID: in.MatchID, PolicyVersion: p.version, Revision: version, Deadline: in.Deadline, State: state, Candidates: ids}
 	if err = p.service.Start(o); err != nil {
 		return err
 	}
