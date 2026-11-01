@@ -137,9 +137,29 @@ func requireExplicitValue(raw json.RawMessage, typ reflect.Type) error {
 	}
 	switch typ.Kind() {
 	case reflect.Struct:
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		token, err := dec.Token()
+		if err != nil || token != json.Delim('{') {
 			return fmt.Errorf("expected object for %s", typ)
+		}
+		fields := make(map[string]json.RawMessage)
+		for dec.More() {
+			key, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			name := key.(string)
+			if _, exists := fields[name]; exists {
+				return fmt.Errorf("duplicate field %q", name)
+			}
+			var value json.RawMessage
+			if err := dec.Decode(&value); err != nil {
+				return err
+			}
+			fields[name] = value
+		}
+		if _, err := dec.Token(); err != nil {
+			return err
 		}
 		for i := 0; i < typ.NumField(); i++ {
 			field := typ.Field(i)
@@ -160,6 +180,10 @@ func requireExplicitValue(raw json.RawMessage, typ reflect.Type) error {
 			if err := requireExplicitValue(value, field.Type); err != nil {
 				return fmt.Errorf("%s: %w", name, err)
 			}
+			delete(fields, name)
+		}
+		for name := range fields {
+			return fmt.Errorf("unknown or incorrectly cased field %q in %s", name, typ)
 		}
 	case reflect.Array, reflect.Slice:
 		var items []json.RawMessage

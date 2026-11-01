@@ -76,6 +76,21 @@ func TestBuildEvidence(t *testing.T) {
 		{"missing field", func(s *EvidenceBuildManifest) { s.Round.Values["one"] = json.RawMessage(`{"Round":1}`) }},
 		{"null field", func(s *EvidenceBuildManifest) { s.Round.Values["one"] = json.RawMessage(`{"Round":1,"Wins":null}`) }},
 		{"short array", func(s *EvidenceBuildManifest) { s.Round.Values["one"] = json.RawMessage(`{"Round":1,"Wins":[0]}`) }},
+		{"duplicate field", func(s *EvidenceBuildManifest) {
+			s.Round.Values["one"] = json.RawMessage(`{"Round":1,"Wins":[0,0],"Round":0}`)
+		}},
+		{"case alias", func(s *EvidenceBuildManifest) {
+			s.Round.Values["one"] = json.RawMessage(`{"Round":1,"Wins":[0,0],"round":0}`)
+		}},
+		{"cards case alias", func(s *EvidenceBuildManifest) {
+			s.Cards = &EvidenceBuildGroup{Labels: s.Round.Labels, RequiredRGB: s.Round.RequiredRGB, Values: map[string]json.RawMessage{"one": json.RawMessage(`{"Visible":[],"HandOrder":[],"visible":null}`)}}
+		}},
+		{"nested duplicate", func(s *EvidenceBuildManifest) {
+			s.Targets = []EvidenceBuildGroup{{Labels: s.Round.Labels, RequiredRGB: s.Round.RequiredRGB, Values: map[string]json.RawMessage{"one": json.RawMessage(`{"Kind":"control","ID":"pass","LayoutID":"layout","Bounds":{"Min":{"X":1,"Y":1,"X":2},"Max":{"X":5,"Y":5}}}`)}}}
+		}},
+		{"nested alias", func(s *EvidenceBuildManifest) {
+			s.Targets = []EvidenceBuildGroup{{Labels: s.Round.Labels, RequiredRGB: s.Round.RequiredRGB, Values: map[string]json.RawMessage{"one": json.RawMessage(`{"Kind":"control","ID":"pass","LayoutID":"layout","Bounds":{"Min":{"X":1,"Y":1,"x":2},"Max":{"X":5,"Y":5}}}`)}}}
+		}},
 		{"missing rgb", func(s *EvidenceBuildManifest) { s.Round.RequiredRGB = nil }},
 		{"wrong label", func(s *EvidenceBuildManifest) {
 			s.Round.Values = map[string]json.RawMessage{"other": json.RawMessage(`{"Round":1,"Wins":[0,0]}`)}
