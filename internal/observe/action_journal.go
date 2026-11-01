@@ -141,6 +141,12 @@ func (j *ActionJournal) ExecuteStep(action Action, execute func(Action) error) e
 		j.complete = false
 		err = errors.Join(err, fmt.Errorf("input adapter returned without receipt; do not replay"))
 	}
+	if err == nil && j.complete && id == j.pending {
+		err = j.writer.AppendDurable(matchlog.Event{EventType: "input_completed", ActionID: id, Step: &step, StateVersion: version})
+		if err == nil {
+			j.steps[len(j.steps)-1].Completed = true
+		}
+	}
 	if err != nil {
 		j.complete = false
 	}

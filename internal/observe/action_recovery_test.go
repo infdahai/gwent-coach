@@ -28,7 +28,7 @@ func TestDurableRecoveryConfirmsOriginalActionWithoutReselection(t *testing.T) {
 	if err = j.Begin("m/9", snapshot, original); err != nil {
 		t.Fatal(err)
 	}
-	at := time.Now().Add(-time.Second)
+	at := time.Now().Add(-10 * time.Millisecond)
 	for _, point := range []int{400, 900} {
 		if err = j.ExecuteStep(Action{Kind: "click", X: point, Y: 500, Reference: "before"}, func(a Action) error {
 			return a.onReceipt(InputReceipt{Outcome: "delivered", EventsSent: 2, DeliveredAt: at})
@@ -149,7 +149,7 @@ func TestRestoredConfirmedEligibleSnapshotStartsDecision(t *testing.T) {
 	if err = j.Begin("m/6", Snapshot{Version: 6, Source: before.Source, Phase: before.Phase, State: beforeState}, rules.Action{Kind: "order", Card: "tactic", Target: "ally"}); err != nil {
 		t.Fatal(err)
 	}
-	at := time.Now().Add(-time.Second)
+	at := time.Now().Add(-10 * time.Millisecond)
 	if err = j.ExecuteStep(Action{Kind: "click"}, func(a Action) error {
 		return a.onReceipt(InputReceipt{Outcome: "delivered", EventsSent: 2, DeliveredAt: at})
 	}); err != nil {
@@ -211,6 +211,100 @@ func TestRestoredConfirmedEligibleSnapshotStartsDecision(t *testing.T) {
 	defer cancel()
 	if err = loop.Run(ctx); err != nil || sends != 1 {
 		t.Fatalf("err=%v sends=%d", err, sends)
+	}
+}
+
+func TestPlannedRecoveryRequiresCompletedExecution(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		adapterError     bool
+		removeCompletion bool
+		markDelivered    bool
+		expired          bool
+		wantSuccess      bool
+	}{
+		{name: "interrupted hold", adapterError: true},
+		{name: "crash after receipt", removeCompletion: true},
+		{name: "completed step", wantSuccess: true},
+		{name: "legacy delivered action", removeCompletion: true, markDelivered: true, wantSuccess: true},
+		{name: "delivered confirmation expired", markDelivered: true, expired: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &receiptSink{}
+			j := NewActionJournal(sink)
+			state, _ := semanticState(SemanticObservation{MatchID: "m", Source: "before", Phase: "turn"})
+			at := time.Now().Add(-10 * time.Millisecond)
+			if tc.expired {
+				at = time.Now().Add(-2 * time.Second)
+			}
+			plan := ActionPlan{Action: rules.Action{Kind: "pass"}, Deadline: time.Now().Add(time.Second), Inputs: []PlannedInput{{Kind: "hold"}}}
+			if err := j.Begin("m/1", Snapshot{Version: 1, Source: "before", Phase: "turn", State: state}, plan); err != nil {
+				t.Fatal(err)
+			}
+			err := j.ExecuteStep(Action{Kind: "hold"}, func(a Action) error {
+				if err := a.onReceipt(InputReceipt{Outcome: "delivered", EventsSent: 2, DeliveredAt: at}); err != nil {
+					return err
+				}
+				if tc.adapterError {
+					return context.Canceled
+				}
+				return nil
+			})
+			if (err != nil) != tc.adapterError {
+				t.Fatalf("execute: %v", err)
+			}
+			if tc.markDelivered {
+				if err := j.MarkDelivered("m/1"); err != nil {
+					t.Fatal(err)
+				}
+				if err := j.Unresolved(context.Canceled); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.removeCompletion {
+				filtered := sink.events[:0]
+				for _, e := range sink.events {
+					if e.EventType != "input_completed" {
+						filtered = append(filtered, e)
+					}
+				}
+				sink.events = filtered
+			}
+			for i := range sink.events {
+				sink.events[i].MatchID = "m"
+			}
+			restored, err := RestoreActionJournal(sink, sink.events)
+			if err != nil {
+				t.Fatal(err)
+			}
+			loop := LocalLoop{Decisions: planEvaluator{}, Journal: restored, DecisionBudget: time.Second, ConfirmationBudget: time.Second,
+				Observe: func(ctx context.Context) (SemanticObservation, error) {
+					return withTestEvidence(SemanticObservation{MatchID: "m", Source: "after", Phase: "result", Result: true, CapturedAt: time.Now()}), nil
+				},
+				Plan: func(SemanticObservation, rules.Action, time.Time) (ActionPlan, error) {
+					t.Fatal("reselected action")
+					return ActionPlan{}, nil
+				},
+				ObserveTarget: func(context.Context, PlannedInput, *Snapshot) (TargetEvidence, error) {
+					t.Fatal("reobserved completed input")
+					return TargetEvidence{}, nil
+				},
+				ExecutePlanned: func(context.Context, PlannedInput, TargetEvidence, time.Time) error {
+					t.Fatal("replayed input")
+					return nil
+				},
+				Confirm: func(_ rules.Action, o SemanticObservation) bool { return o.Result },
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			err = loop.Run(ctx)
+			if tc.wantSuccess && err != nil {
+				t.Fatalf("recovery: %v", err)
+			}
+			if !tc.wantSuccess && (err == nil || (!strings.Contains(err.Error(), "lacks completed execution") && !strings.Contains(err.Error(), "deadline expired"))) {
+				t.Fatalf("recovery: %v", err)
+			}
+		})
 	}
 }
 

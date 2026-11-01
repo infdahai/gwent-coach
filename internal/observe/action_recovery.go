@@ -11,9 +11,10 @@ import (
 )
 
 type RecordedInputStep struct {
-	Number  uint64
-	Input   Action
-	Receipt *InputReceipt
+	Number    uint64
+	Input     Action
+	Receipt   *InputReceipt
+	Completed bool
 }
 
 type PendingAction struct {
@@ -134,6 +135,11 @@ func RestoreActionJournal(writer durableEvents, events []matchlog.Event) (*Actio
 			if !(r.Outcome == "delivered" && r.EventsSent == 2) && !(r.Outcome == "cursor_moved" && j.steps[len(j.steps)-1].Input.Kind == "hover" && r.EventsSent == 0) {
 				j.complete = false
 			}
+		case "input_completed":
+			if e.ActionID != j.pending || e.Step == nil || *e.Step != j.step || e.StateVersion == nil || *e.StateVersion != j.version || len(j.steps) == 0 || j.steps[len(j.steps)-1].Receipt == nil || j.steps[len(j.steps)-1].Completed || !j.complete || j.deliveryComplete {
+				return nil, fmt.Errorf("invalid input completion")
+			}
+			j.steps[len(j.steps)-1].Completed = true
 		case "action_auto_ended":
 			if e.ActionID != j.pending || !j.complete || j.delivered.IsZero() || j.autoEnded || e.CapturedAt == nil || e.FramePath == nil {
 				return nil, fmt.Errorf("invalid recorded automatic end")

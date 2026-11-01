@@ -265,8 +265,8 @@ func (l LocalLoop) Run(ctx context.Context) (runErr error) {
 				p := PendingPlan{Plan: restoredPlan, MatchID: original.MatchID}
 				for i, step := range recovery.Steps {
 					want := restoredPlan.Inputs[i]
-					if step.Input.Kind != want.Kind || step.Input.X != want.Point.X || step.Input.Y != want.Point.Y || step.Receipt == nil {
-						return fmt.Errorf("recorded input differs from plan or lacks receipt")
+					if step.Input.Kind != want.Kind || step.Input.X != want.Point.X || step.Input.Y != want.Point.Y || step.Receipt == nil || !step.Completed {
+						return fmt.Errorf("recorded input differs from plan or lacks completed execution; do not replay")
 					}
 					if err := p.RecordReceipt(*step.Receipt); err != nil {
 						return err
@@ -288,7 +288,7 @@ func (l LocalLoop) Run(ctx context.Context) (runErr error) {
 			if err != nil {
 				return err
 			}
-			confirmationDeadline = time.Now().Add(l.ConfirmationBudget)
+			confirmationDeadline = deliveredAt.Add(l.ConfirmationBudget)
 			if l.Plan != nil && restoredPlan.Deadline.Before(confirmationDeadline) {
 				confirmationDeadline = restoredPlan.Deadline
 			}
