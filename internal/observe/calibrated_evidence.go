@@ -175,6 +175,25 @@ func (r *CalibratedEvidenceReader) validateFrame(frame stateestimate.FrameRef, i
 	return nil
 }
 
+// TargetCandidates recognizes targets in a native image without creating evidence.
+// Results are unvalidated candidates and do not authorize input.
+func (r *CalibratedEvidenceReader) TargetCandidates(img image.Image) ([]stateestimate.Target, error) {
+	if img == nil || img.Bounds().Dx() != r.cal.Stage.Width || img.Bounds().Dy() != r.cal.Stage.Height {
+		return nil, fmt.Errorf("native image required")
+	}
+	return r.recognizeTargets(img), nil
+}
+
+func (r *CalibratedEvidenceReader) recognizeTargets(img image.Image) []stateestimate.Target {
+	var targets []stateestimate.Target
+	for _, cal := range r.cal.Targets {
+		if target := readFact(cal, img); target != nil {
+			targets = append(targets, *target)
+		}
+	}
+	return targets
+}
+
 func (r *CalibratedEvidenceReader) readFacts(frame stateestimate.FrameRef, img image.Image, stage string) stateestimate.Evidence {
 	facts := stateestimate.Facts{
 		Round: readFact(r.cal.Round, img), Turn: readFact(r.cal.Turn, img), Totals: readFact(r.cal.Totals, img),
@@ -184,12 +203,7 @@ func (r *CalibratedEvidenceReader) readFacts(frame stateestimate.FrameRef, img i
 		facts.Cards.Visible = append(facts.Cards.Visible[:0:0], facts.Cards.Visible...)
 		facts.Cards.HandOrder = append(facts.Cards.HandOrder[:0:0], facts.Cards.HandOrder...)
 	}
-	var targets []stateestimate.Target
-	for _, cal := range r.cal.Targets {
-		if target := readFact(cal, img); target != nil {
-			targets = append(targets, *target)
-		}
-	}
+	targets := r.recognizeTargets(img)
 	scalars := make(map[string]int)
 	for name, cal := range r.cal.Scalars {
 		if value := readFact(cal, img); value != nil {
