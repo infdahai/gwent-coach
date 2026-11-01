@@ -57,7 +57,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		in := rules.DecisionInput{MatchID: "offline-demo", Phase: "turn", Player: 0, View: v, Deadline: time.Now().Add(time.Second), Candidates: []rules.Action{{Kind: "pass"}, {Kind: "play", Card: s.Cards[0].ID}}}
+		in := rules.DecisionInput{MatchID: "offline-demo", Phase: "turn", Player: 0, View: v, HandOrder: []string{s.Cards[0].ID, s.Cards[1].ID}, Deadline: time.Now().Add(time.Second), Candidates: []rules.Action{{Kind: "pass"}, {Kind: "play", Card: s.Cards[0].ID}}}
 		d := rules.NewDecisionService(e)
 		defer d.Close()
 		a, err := d.Fast(in)

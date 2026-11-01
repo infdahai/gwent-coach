@@ -5,8 +5,11 @@ import (
 	"image/color"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gwentcoachmvp/internal/cardindex"
+	"gwentcoachmvp/internal/cards"
+	"gwentcoachmvp/internal/rules"
 )
 
 func pattern(reverse bool) Feature {
@@ -35,6 +38,116 @@ func fixture(t testing.TB) *cardindex.Index {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func TestCandidateDecision(t *testing.T) {
+	db := fixture(t)
+	img := gradient()
+	roi := ROI{0, 0, 180, 160}
+	feature, err := Normalize(img, roi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	single, err := New(File{Version: db.Version(), FeatureVersion: FeatureVersion, Templates: []Template{{152405, feature}}}, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matcher, err := New(File{Version: db.Version(), FeatureVersion: FeatureVersion, Templates: []Template{{152405, feature}, {113310, pattern(true)}}}, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := cards.Load("../../data/cards/14.10.0/en/cards.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := rules.New(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := engine.Initial([2][]int{{152405}, {}}, [2][]int{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := state.View(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := rules.DecisionInput{MatchID: "offline", Phase: "turn", Player: 0, View: view, HandOrder: []string{state.Cards[0].ID}, Deadline: time.Now().Add(time.Second)}
+	frame := DecisionFrame{Source: "one", Image: img, Cards: []ObservedCard{{Instance: state.Cards[0].ID, Art: roi}}}
+	other := frame
+	other.Source = "two"
+	thresholds := Thresholds{MaxDistance: 0, MinGap: 1}
+	if _, err := CandidateDecision(single, rules.NewDecisionService(engine), input, [2]DecisionFrame{frame, other}, thresholds); err == nil {
+		t.Fatal("accepted recognition without a competing identity")
+	}
+	action, err := CandidateDecision(matcher, rules.NewDecisionService(engine), input, [2]DecisionFrame{frame, other}, thresholds)
+	if err != nil || action.Kind != "play" || action.Card != state.Cards[0].ID {
+		t.Fatalf("decision %+v: %v", action, err)
+	}
+	if _, _, err := engine.Apply(state, action); err != nil {
+		t.Fatalf("illegal decision: %v", err)
+	}
+	other.Cards = nil
+	if _, err := CandidateDecision(matcher, rules.NewDecisionService(engine), input, [2]DecisionFrame{frame, other}, thresholds); err == nil {
+		t.Fatal("accepted incomplete observation")
+	}
+	other = frame
+	if _, err := CandidateDecision(matcher, rules.NewDecisionService(engine), input, [2]DecisionFrame{frame, other}, thresholds); err == nil {
+		t.Fatal("accepted repeated frame source")
+	}
+	other.Source = "two"
+	other.Cards = []ObservedCard{{Instance: state.Cards[0].ID, Art: roi}, {Instance: state.Cards[0].ID, Art: roi}}
+	if _, err := CandidateDecision(matcher, rules.NewDecisionService(engine), input, [2]DecisionFrame{frame, other}, thresholds); err == nil {
+		t.Fatal("accepted duplicate card")
+	}
+	other.Cards = frame.Cards
+	wrong := input
+	wrong.View.Visible = append([]rules.Instance(nil), input.View.Visible...)
+	wrong.View.Visible[0].CardID = 113310
+	if _, err := CandidateDecision(matcher, rules.NewDecisionService(engine), wrong, [2]DecisionFrame{frame, other}, thresholds); err == nil {
+		t.Fatal("accepted conflicting identity")
+	}
+	other.Image = image.NewGray(image.Rect(0, 0, 180, 160))
+	if _, err := CandidateDecision(matcher, rules.NewDecisionService(engine), input, [2]DecisionFrame{frame, other}, thresholds); err == nil {
+		t.Fatal("accepted unrecognized card")
+	}
+
+	turn, err := NewCandidateTurn(matcher, engine, state, 0, thresholds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other = frame
+	other.Source = "two"
+	event, err := turn.Prepare(input, [2]DecisionFrame{frame, other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := turn.Prepare(input, [2]DecisionFrame{frame, other}); err == nil {
+		t.Fatal("accepted a second pending action")
+	}
+	after, err := event.After.View(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstAfter, secondAfter := frame, other
+	firstAfter.Source, secondAfter.Source = "three", "four"
+	if err := turn.Confirm(after, [2]DecisionFrame{firstAfter, secondAfter}); err == nil {
+		t.Fatal("confirmed without delivery")
+	}
+	if err := turn.Delivered(event.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	if err := turn.Confirm(after, [2]DecisionFrame{frame, other}); err == nil {
+		t.Fatal("confirmed with old frames")
+	}
+	wrongAfter := after
+	wrongAfter.Score[0]++
+	if err := turn.Confirm(wrongAfter, [2]DecisionFrame{firstAfter, secondAfter}); err == nil {
+		t.Fatal("confirmed mismatched state")
+	}
+	if err := turn.Confirm(after, [2]DecisionFrame{firstAfter, secondAfter}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestMatchContracts(t *testing.T) {

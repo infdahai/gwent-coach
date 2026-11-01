@@ -16,13 +16,15 @@ type View struct {
 	BetweenRounds, Finished     bool
 	Winner                      int
 	Visible                     []Instance
+	StartingDeckKnown           bool
+	StartingHighProvision       int
 }
 
 func (s State) View(player int) (View, error) {
 	if player < 0 || player > 1 {
 		return View{}, fmt.Errorf("invalid viewer")
 	}
-	v := View{Ruleset: s.Ruleset, Round: s.Round, Turn: s.Turn, Revision: s.Revision, Wins: s.Wins, Passed: s.Passed, BetweenRounds: s.BetweenRounds, Finished: s.Finished, Winner: s.Winner, Score: [2]int{s.Score(0), s.Score(1)}}
+	v := View{Ruleset: s.Ruleset, Round: s.Round, Turn: s.Turn, Revision: s.Revision, Wins: s.Wins, Passed: s.Passed, BetweenRounds: s.BetweenRounds, Finished: s.Finished, Winner: s.Winner, Score: [2]int{s.Score(0), s.Score(1)}, StartingDeckKnown: s.StartingDeckKnown[player], StartingHighProvision: s.StartingHighProvision[player]}
 	for _, c := range s.Cards {
 		if c.Owner < 0 || c.Owner > 1 {
 			return View{}, fmt.Errorf("invalid owner")

@@ -1,6 +1,17 @@
 package observe
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
+
+// InputReceipt describes transport delivery, never semantic success.
+// DeliveredAt is recorded at the input API boundary, before settling/capture.
+type InputReceipt struct {
+	Outcome     string    `json:"outcome"`
+	EventsSent  uint32    `json:"events_sent"`
+	DeliveredAt time.Time `json:"delivered_at,omitempty"`
+}
 
 // Action is a single operator-reviewed input tied to a recent observation.
 type Action struct {
@@ -12,10 +23,14 @@ type Action struct {
 	PhaseModel    string `json:"phase_model,omitempty"`
 	ExpectedPhase string `json:"expected_phase,omitempty"`
 	phaseModel    *PhaseModel
+	deadline      time.Time
+	guardProbe    bool
+	primitiveOnly bool
+	onReceipt     func(InputReceipt) error
 }
 
 func (a Action) Validate() error {
-	if a.Kind != "click" && a.Kind != "hold" && a.Kind != "escape" {
+	if a.Kind != "click" && a.Kind != "hold" && a.Kind != "hover" && a.Kind != "escape" {
 		return fmt.Errorf("unsupported action %q", a.Kind)
 	}
 	if a.Reference == "" || a.StopFile == "" {

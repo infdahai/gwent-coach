@@ -75,5 +75,6 @@ func encodeFrame(w io.Writer, src image.Image, s Sampling) (image.Point, error) 
 	if s.JPEGQuality > 0 {
 		return size, jpeg.Encode(w, src, &jpeg.Options{Quality: s.JPEGQuality})
 	}
-	return size, png.Encode(w, src)
+	encoder := png.Encoder{CompressionLevel: png.BestSpeed}
+	return size, encoder.Encode(w, src)
 }

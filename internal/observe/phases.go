@@ -3,33 +3,28 @@ package observe
 import (
 	"encoding/json"
 	"fmt"
+	"gwentcoachmvp/internal/uiphase"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 )
 
-// PhaseModel uses operator-labelled, local-only UI crops. No account images are embedded.
-type PhaseModel struct {
-	Width, Height int
-	Phases        []Phase
+// Compatibility names retain existing callers; recognition is owned by uiphase.
+type PhaseModel = uiphase.PhaseModel
+type Phase = uiphase.Phase
+type Anchor = uiphase.Anchor
+type PhaseScore = uiphase.PhaseScore
+
+func AnchorPixels(img image.Image, a Anchor, w, h int) []float64 {
+	return uiphase.AnchorPixels(img, a, w, h)
 }
-type Phase struct {
-	Name    string
-	Anchors []Anchor
+func GreenCoverage(img image.Image, a Anchor, w, h int) float64 {
+	return uiphase.GreenCoverage(img, a, w, h)
 }
-type Anchor struct {
-	X, Y, Width, Height int
-	Pixels              []float64
-	MaxError            float64
-}
-type PhaseScore struct {
-	Name  string
-	Error float64
-}
+func anchorError(pixels []float64, a Anchor) float64 { return uiphase.AnchorError(pixels, a) }
 
 func LoadPhases(path string) (*PhaseModel, error) {
 	b, e := os.ReadFile(path)
@@ -46,91 +41,53 @@ func parsePhases(b []byte) (*PhaseModel, error) {
 	}
 	return &m, m.Validate()
 }
-func (m *PhaseModel) Validate() error {
-	if m.Width < 1 || m.Height < 1 || len(m.Phases) == 0 {
-		return fmt.Errorf("empty phase model")
-	}
-	seen := map[string]bool{}
-	for _, p := range m.Phases {
-		if p.Name == "" || p.Name == "unknown" || seen[p.Name] || len(p.Anchors) < 2 {
-			return fmt.Errorf("phase requires unique name and at least two anchors")
-		}
-		seen[p.Name] = true
-		for _, a := range p.Anchors {
-			if a.X < 0 || a.Y < 0 || a.Width < 1 || a.Height < 1 || a.X+a.Width > m.Width || a.Y+a.Height > m.Height || len(a.Pixels) != 16*8*3 || a.MaxError <= 0 || a.MaxError > 0.15 || math.IsNaN(a.MaxError) {
-				return fmt.Errorf("invalid anchor in %s", p.Name)
-			}
-			for _, v := range a.Pixels {
-				if v < 0 || v > 1 || math.IsNaN(v) || math.IsInf(v, 0) {
-					return fmt.Errorf("invalid pixel")
-				}
-			}
-		}
-	}
-	return nil
+
+type phaseAnchorDiagnostic struct {
+	Phase                              string `json:"phase"`
+	Variant                            int    `json:"variant"`
+	Mode                               string `json:"mode,omitempty"`
+	Feature                            string `json:"feature,omitempty"`
+	X, Y, Width, Height                int
+	Error, MaxError                    float64
+	Coverage, MinCoverage, MaxCoverage float64
 }
 
-// AnchorPixels averages cells rather than comparing animated full frames exactly.
-func AnchorPixels(img image.Image, a Anchor, w, h int) []float64 {
-	b := img.Bounds()
-	out := make([]float64, 16*8*3)
-	for gy := 0; gy < 8; gy++ {
-		for gx := 0; gx < 16; gx++ {
-			x0 := b.Min.X + (a.X+a.Width*gx/16)*b.Dx()/w
-			x1 := b.Min.X + (a.X+a.Width*(gx+1)/16)*b.Dx()/w
-			y0 := b.Min.Y + (a.Y+a.Height*gy/8)*b.Dy()/h
-			y1 := b.Min.Y + (a.Y+a.Height*(gy+1)/8)*b.Dy()/h
-			n := 0.
-			i := (gy*16 + gx) * 3
-			for y := y0; y < max(y0+1, y1); y++ {
-				for x := x0; x < max(x0+1, x1); x++ {
-					r, g, bl, _ := img.At(x, y).RGBA()
-					out[i] += float64(r) / 65535
-					out[i+1] += float64(g) / 65535
-					out[i+2] += float64(bl) / 65535
-					n++
+func phaseAnchorDiagnostics(m *PhaseModel, img image.Image) []phaseAnchorDiagnostic {
+	var out []phaseAnchorDiagnostic
+	for _, phase := range m.Phases {
+		for variant, anchors := range append([][]Anchor{phase.Anchors}, phase.Variants...) {
+			for _, a := range anchors {
+				d := phaseAnchorDiagnostic{Phase: phase.Name, Variant: variant, Mode: a.Mode, Feature: a.Feature, X: a.X, Y: a.Y, Width: a.Width, Height: a.Height, MaxError: a.MaxError, MinCoverage: a.MinCoverage, MaxCoverage: a.MaxCoverage}
+				if a.Feature == "green-coverage-v1" {
+					d.Coverage = GreenCoverage(img, a, m.Width, m.Height)
+					d.Error = max(a.MinCoverage-d.Coverage, d.Coverage-a.MaxCoverage, 0)
+				} else {
+					d.Error = anchorError(AnchorPixels(img, a, m.Width, m.Height), a)
 				}
-			}
-			for j := 0; j < 3; j++ {
-				out[i+j] /= n
+				out = append(out, d)
 			}
 		}
 	}
 	return out
 }
-func (m *PhaseModel) Recognize(img image.Image) (string, []PhaseScore) {
-	if img.Bounds().Dx()*m.Height != img.Bounds().Dy()*m.Width {
-		return "unknown", nil
+
+func DiagnosePhaseFile(modelPath, imagePath string, w io.Writer) error {
+	model, err := LoadPhases(modelPath)
+	if err != nil {
+		return err
 	}
-	match := "unknown"
-	matches := 0
-	var scores []PhaseScore
-	for _, p := range m.Phases {
-		worst := 0.
-		ok := true
-		for _, a := range p.Anchors {
-			v := AnchorPixels(img, a, m.Width, m.Height)
-			err := 0.
-			for i, x := range v {
-				err += math.Abs(x - a.Pixels[i])
-			}
-			err /= float64(len(v))
-			worst = max(worst, err)
-			if err > a.MaxError {
-				ok = false
-			}
-		}
-		scores = append(scores, PhaseScore{p.Name, worst})
-		if ok {
-			match = p.Name
-			matches++
-		}
+	img, err := readImage(imagePath)
+	if err != nil {
+		return err
 	}
-	if matches != 1 {
-		return "unknown", scores
-	}
-	return match, scores
+	phase, scores := model.Recognize(img)
+	return json.NewEncoder(w).Encode(struct {
+		Phase   string
+		Scores  []PhaseScore
+		Anchors any
+	}{phase, scores, phaseAnchorDiagnostics(model, img)})
 }
+
 func ClassifyFile(modelPath, imagePath string, w io.Writer) error {
 	m, e := LoadPhases(modelPath)
 	if e != nil {
@@ -193,9 +150,21 @@ func BuildPhases(labelsPath, out string) error {
 			if a.X < 0 || a.Y < 0 || a.Width < 16 || a.Height < 8 || a.X+a.Width > m.Width || a.Y+a.Height > m.Height {
 				return fmt.Errorf("invalid label ROI")
 			}
-			a.Pixels = AnchorPixels(img, *a, m.Width, m.Height)
+			if a.Feature == "" {
+				a.Pixels = AnchorPixels(img, *a, m.Width, m.Height)
+			}
 		}
-		m.Phases = append(m.Phases, p)
+		found := false
+		for i := range m.Phases {
+			if m.Phases[i].Name == p.Name {
+				m.Phases[i].Variants = append(m.Phases[i].Variants, p.Anchors)
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.Phases = append(m.Phases, p)
+		}
 	}
 	if e = m.Validate(); e != nil {
 		return e

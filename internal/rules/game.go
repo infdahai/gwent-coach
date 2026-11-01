@@ -32,6 +32,8 @@ type State struct {
 	BetweenRounds, Finished bool
 	Winner                  int // -1 for ongoing or drawn match
 	Revision                int
+	StartingHighProvision   [2]int
+	StartingDeckKnown       [2]bool
 }
 
 type Action struct {
@@ -56,6 +58,7 @@ func (e *Engine) Initial(hands, decks [2][]int, starter int) (State, error) {
 		return State{}, fmt.Errorf("invalid starter")
 	}
 	for p := 0; p < 2; p++ {
+		s.StartingDeckKnown[p] = true
 		if len(hands[p]) > 10 {
 			return State{}, fmt.Errorf("hand exceeds ten")
 		}
@@ -68,6 +71,9 @@ func (e *Engine) Initial(hands, decks [2][]int, starter int) (State, error) {
 					return State{}, fmt.Errorf("unsupported card %d", id)
 				}
 				c := e.catalog.Cards[id]
+				if c.Attributes.Provision >= 11 {
+					s.StartingHighProvision[p]++
+				}
 				s.Cards = append(s.Cards, Instance{ID: fmt.Sprintf("p%d-%d", p, len(s.Cards)), CardID: id, Owner: p, Power: c.Attributes.Power, Armor: c.Attributes.Armor, Row: -1, Zone: group.zone})
 			}
 		}
@@ -151,12 +157,25 @@ func (e *Engine) apply(s *State, a Action) error {
 	if s.BetweenRounds || a.Player != s.Turn || s.Passed[a.Player] || a.Draws != [2]int{} {
 		return fmt.Errorf("not an active turn")
 	}
+	for _, card := range s.Cards {
+		if card.Zone == Board && (card.CardID == 200535 || card.CardID == 142102) && card.Owner == a.Player {
+			return fmt.Errorf("swordmaster active turn unsupported")
+		}
+	}
 	switch a.Kind {
 	case "pass":
 		if a.Card != "" || a.Target != "" || a.Row != 0 {
 			return fmt.Errorf("pass has unexpected fields")
 		}
 		s.Passed[a.Player] = true
+	case "order":
+		i, target := index(*s, a.Card), index(*s, a.Target)
+		if a.Row != 0 || i < 0 || target < 0 || s.Cards[i].Owner != a.Player || s.Cards[i].Zone != Board || s.Cards[i].CardID != 202140 || s.Cards[target].Owner != a.Player || s.Cards[target].Zone != Board || e.catalog.Cards[s.Cards[target].CardID].Attributes.Type != "Unit" {
+			return fmt.Errorf("invalid tactical advantage order")
+		}
+		s.Cards[target].Power += 5
+		s.Cards = append(s.Cards[:i], s.Cards[i+1:]...)
+		return nil
 	case "play":
 		i := index(*s, a.Card)
 		if i < 0 || s.Cards[i].Owner != a.Player || s.Cards[i].Zone != Hand {
@@ -166,14 +185,29 @@ func (e *Engine) apply(s *State, a Action) error {
 		if !ok {
 			return fmt.Errorf("unsupported card")
 		}
+		if d.Kind == "swordmaster_passive" || d.Kind == "isengrim_passive" {
+			return fmt.Errorf("opponent-only board context cannot be played")
+		}
 		c := e.catalog.Cards[d.ID]
+		if c.Attributes.Type == "Stratagem" {
+			return fmt.Errorf("stratagem cannot be played from hand")
+		}
 		target := -1
-		if d.Kind != "unit" {
+		if d.Kind == "keeper_empty_board" {
+			if a.Target != "" {
+				return fmt.Errorf("keeper targeting and Bleeding are unsupported")
+			}
+			for _, other := range s.Cards {
+				if other.Zone == Board && other.Owner != a.Player {
+					return fmt.Errorf("keeper targeting and Bleeding are unsupported")
+				}
+			}
+		} else if d.Kind != "unit" && d.Kind != "wolf_pack" && d.Kind != "oxenfurt_scholar" {
 			target = index(*s, a.Target)
-			if target < 0 || (s.Cards[target].Zone != Board && !(d.Kind == "plunderer" && target == i)) {
+			if target < 0 || (s.Cards[target].Zone != Board && !(d.Kind == "plunderer" && target == i)) || (s.Cards[target].Zone == Board && e.catalog.Cards[s.Cards[target].CardID].Attributes.Type != "Unit") {
 				return fmt.Errorf("target must be a board unit")
 			}
-			if d.Kind == "piercing" && s.Cards[target].Owner == a.Player {
+			if (d.Kind == "piercing" || d.Kind == "knight_errant" || d.Kind == "mage_assassin_deploy") && s.Cards[target].Owner == a.Player {
 				return fmt.Errorf("target must be enemy")
 			}
 		} else if a.Target != "" {
@@ -185,12 +219,21 @@ func (e *Engine) apply(s *State, a Action) error {
 			}
 			count := 0
 			for _, u := range s.Cards {
-				if u.Owner == a.Player && u.Zone == Board && u.Row == a.Row {
+				if u.Owner == a.Player && u.Zone == Board && u.Row == a.Row && e.catalog.Cards[u.CardID].Attributes.Type == "Unit" {
 					count++
 				}
 			}
 			if count >= 9 {
 				return fmt.Errorf("row full")
+			}
+			if d.Kind == "oxenfurt_scholar" {
+				if !s.StartingDeckKnown[a.Player] {
+					return fmt.Errorf("starting deck provisions unknown")
+				}
+				s.Cards[i].Power += s.StartingHighProvision[a.Player]
+			}
+			if d.Kind == "wolf_pack" {
+				s.Cards[i].Power += count
 			}
 			s.Cards[i].Zone = Board
 			s.Cards[i].Row = a.Row
@@ -206,6 +249,9 @@ func (e *Engine) apply(s *State, a Action) error {
 			case "boost":
 				s.Cards[target].Power += amount
 			default:
+				if d.Kind == "knight_errant" && s.Cards[target].Power >= 6 {
+					amount = 4
+				}
 				if d.Kind == "stunning" && s.Cards[target].Armor > 0 {
 					amount = 7
 				}
