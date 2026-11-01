@@ -38,6 +38,7 @@ type EvidenceCalibration struct {
 	// Scalars are independently labeled numeric regions (for example score or
 	// round counters), not OCR or implicit parts of a complete game view.
 	Scalars map[string]*FactCalibration[int]
+	Digits  map[string]DigitCalibration
 }
 
 // CalibratedEvidenceReader is an immutable, restricted labelled-template
@@ -77,6 +78,14 @@ func NewCalibratedEvidenceReader(cal EvidenceCalibration) (*CalibratedEvidenceRe
 		}
 		if err := validateFactCalibration(scalar, w, h); err != nil {
 			return nil, err
+		}
+	}
+	for name, digits := range cal.Digits {
+		if name == "" || cal.Scalars[name] != nil {
+			return nil, fmt.Errorf("invalid or duplicate digit calibration")
+		}
+		if err := digits.validate(image.Rect(0, 0, w, h)); err != nil {
+			return nil, fmt.Errorf("digits %q: %w", name, err)
 		}
 	}
 	data, err := json.Marshal(cal)
@@ -190,6 +199,11 @@ func (r *CalibratedEvidenceReader) readFacts(frame stateestimate.FrameRef, img i
 	for name, cal := range r.cal.Scalars {
 		if value := readFact(cal, img); value != nil {
 			scalars[name] = *value
+		}
+	}
+	for name, cal := range r.cal.Digits {
+		if value, ok := cal.ReadDigits(img); ok {
+			scalars[name] = value
 		}
 	}
 	return stateestimate.Evidence{Frame: frame, CalibrationID: r.id, Stage: stage, Facts: facts, Targets: targets, Scalars: scalars}
