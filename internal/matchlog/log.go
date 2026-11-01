@@ -29,6 +29,7 @@ type Event struct {
 	EventType          string             `json:"event_type"`
 	ActionID           string             `json:"action_id,omitempty"`
 	ActionDomain       string             `json:"action_domain,omitempty"`
+	InputProtocol      int                `json:"input_protocol,omitempty"`
 	Step               *uint64            `json:"step,omitempty"`
 	DeliveredAt        *string            `json:"delivered_at,omitempty"`
 	DeliveryStatus     string             `json:"delivery_status,omitempty"`

@@ -272,6 +272,9 @@ func TestPlannedRecoveryRequiresCompletedExecution(t *testing.T) {
 			}
 			for i := range sink.events {
 				sink.events[i].MatchID = "m"
+				if tc.name == "legacy delivered action" && sink.events[i].EventType == "action_intent" {
+					sink.events[i].InputProtocol = 0
+				}
 			}
 			restored, err := RestoreActionJournal(sink, sink.events)
 			if err != nil {

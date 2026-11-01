@@ -6,9 +6,12 @@ import (
 	"time"
 )
 
+const InputProtocolCompleted = 1
+
 type InputStep struct {
-	Intent  Event
-	Receipt *Event
+	Intent    Event
+	Receipt   *Event
+	Completed *Event
 }
 type ActionTrace struct {
 	Intent               Event
@@ -84,6 +87,9 @@ func ReplayActions(events []Event) ([]ActionTrace, error) {
 			if e.ActionDomain != "gameplay" && e.ActionDomain != "navigation" {
 				return fail(e, "unknown action domain")
 			}
+			if e.InputProtocol != 0 && e.InputProtocol != InputProtocolCompleted {
+				return fail(e, "unknown input protocol")
+			}
 			index[key] = len(traces)
 			traces = append(traces, ActionTrace{Intent: e})
 			active[e.MatchID] = key
@@ -108,8 +114,14 @@ func ReplayActions(events []Event) ([]ActionTrace, error) {
 			if active[e.MatchID] != key || t.Delivered != nil || t.Confirmed != nil || e.StateVersion == nil || *e.StateVersion != *t.Intent.StateVersion || *e.Step != uint64(len(t.Steps)+1) {
 				return fail(e, "input order or semantic version changed")
 			}
-			if len(t.Steps) > 0 && !fullStep(t.Steps[len(t.Steps)-1]) {
-				return fail(e, "previous step lacks full receipt")
+			if len(t.Steps) > 0 {
+				previous := t.Steps[len(t.Steps)-1]
+				if !fullStep(previous) {
+					return fail(e, "previous step lacks full receipt")
+				}
+				if t.Intent.InputProtocol == InputProtocolCompleted && previous.Completed == nil {
+					return fail(e, "previous step lacks execution completion")
+				}
 			}
 			t.Steps = append(t.Steps, InputStep{Intent: e})
 		case "input_receipt":
@@ -142,6 +154,24 @@ func ReplayActions(events []Event) ([]ActionTrace, error) {
 			if !known {
 				standalone[key] = *step
 			}
+		case "input_completed":
+			if !known {
+				return fail(e, "completion has no original action")
+			}
+			t := &traces[i]
+			if active[e.MatchID] != key || t.Delivered != nil || t.Confirmed != nil || len(t.Steps) == 0 || e.StateVersion == nil || *e.StateVersion != *t.Intent.StateVersion || e.Step == nil {
+				return fail(e, "completion outside active input")
+			}
+			step := &t.Steps[len(t.Steps)-1]
+			if *e.Step != *step.Intent.Step || step.Completed != nil || !fullStep(*step) {
+				return fail(e, "invalid or duplicate input completion")
+			}
+			for _, earlier := range t.Steps[:len(t.Steps)-1] {
+				if earlier.Completed == nil {
+					return fail(e, "earlier step lacks execution completion")
+				}
+			}
+			step.Completed = &e
 		case "action_auto_ended":
 			if !known || active[e.MatchID] != key || traces[i].Delivered != nil || len(traces[i].Steps) == 0 || e.StateVersion == nil || *e.StateVersion != *traces[i].Intent.StateVersion || e.FramePath == nil || e.CapturedAt == nil {
 				return fail(e, "automatic end lacks active delivered input")
@@ -149,6 +179,9 @@ func ReplayActions(events []Event) ([]ActionTrace, error) {
 			last := traces[i].Steps[len(traces[i].Steps)-1]
 			if !fullStep(last) {
 				return fail(e, "automatic end lacks full receipt")
+			}
+			if (traces[i].Intent.InputProtocol == InputProtocolCompleted || traces[i].Steps[0].Completed != nil) && last.Completed == nil {
+				return fail(e, "automatic end lacks execution completion")
 			}
 			captured, err := time.Parse(time.RFC3339Nano, *e.CapturedAt)
 			if err != nil {
@@ -172,6 +205,9 @@ func ReplayActions(events []Event) ([]ActionTrace, error) {
 			for _, step := range t.Steps {
 				if !fullStep(step) {
 					return fail(e, "completion hides missing or partial receipt")
+				}
+				if (t.Intent.InputProtocol == InputProtocolCompleted || t.Steps[0].Completed != nil) && step.Completed == nil {
+					return fail(e, "completion hides unfinished input execution")
 				}
 			}
 			last := t.Steps[len(t.Steps)-1].Receipt

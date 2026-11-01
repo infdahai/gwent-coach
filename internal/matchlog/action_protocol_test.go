@@ -22,6 +22,49 @@ func protocolFixture() []Event {
 	}
 }
 
+func TestInputCompletionProtocol(t *testing.T) {
+	legacy := protocolFixture()
+	marker := func(step uint64) Event {
+		return Event{MatchID: "m", EventType: "input_completed", ActionID: "a", Step: ptr(step), StateVersion: ptr(uint64(1))}
+	}
+	modern := append([]Event{}, legacy[:3]...)
+	modern = append(modern, marker(1))
+	modern = append(modern, legacy[3:5]...)
+	modern = append(modern, marker(2))
+	modern = append(modern, legacy[5:]...)
+	modern[0].InputProtocol = InputProtocolCompleted
+	if _, err := ReplayActions(legacy); err != nil {
+		t.Fatalf("legacy delivery: %v", err)
+	}
+	if samples, err := ConfirmedTrainingEvents(modern); err != nil || len(samples) != 1 {
+		t.Fatalf("modern samples=%d err=%v", len(samples), err)
+	}
+	// A delivered receipt followed by an interrupted hold remains an unresolved tail.
+	interrupted := append([]Event{}, modern[:3]...)
+	interrupted[1].ActionIntent = map[string]string{"kind": "hold"}
+	if traces, err := ReplayActions(interrupted); err != nil || len(traces) != 1 || traces[0].Steps[0].Completed != nil {
+		t.Fatalf("interrupted traces=%+v err=%v", traces, err)
+	}
+	for name, events := range map[string][]Event{
+		"missing marker":        append(append([]Event{}, modern[:6]...), modern[7:]...),
+		"all markers missing":   func() []Event { e := protocolFixture(); e[0].InputProtocol = InputProtocolCompleted; return e }(),
+		"duplicate marker":      append(append(append([]Event{}, modern[:4]...), modern[3]), modern[4:]...),
+		"marker before receipt": func() []Event { e := append([]Event{}, modern...); e[2], e[3] = e[3], e[2]; return e }(),
+		"wrong step":            func() []Event { e := append([]Event{}, modern...); e[3].Step = ptr(uint64(2)); return e }(),
+		"wrong version":         func() []Event { e := append([]Event{}, modern...); e[3].StateVersion = ptr(uint64(2)); return e }(),
+		"late marker":           func() []Event { e := append([]Event{}, modern...); e[6], e[7] = e[7], e[6]; return e }(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ReplayActions(events); err == nil {
+				t.Fatal("accepted invalid completion stream")
+			}
+			if _, err := ConfirmedTrainingEvents(events); err == nil {
+				t.Fatal("accepted invalid training stream")
+			}
+		})
+	}
+}
+
 func TestTerminalCannotHideUnresolvedInput(t *testing.T) {
 	terminal := Event{MatchID: "m", EventType: "match_completed"}
 	intent := Event{MatchID: "m", EventType: "action_intent", ActionID: "b", ActionDomain: "gameplay", StateVersion: ptr(uint64(3))}
