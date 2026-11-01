@@ -21,13 +21,9 @@ func navigatePlatform(out string, logger *log.Logger, n Navigation, m *PhaseMode
 }
 
 func navigationPrototype(out string, logger *log.Logger, n Navigation, m *PhaseModel) error {
-	// Interlock location is fixed per interactive account, independent of output,
-	// stop-file and caller-chosen session directories.
-	root, err := os.UserConfigDir()
-	if err != nil {
-		return err
-	}
-	n.InterlockDir = filepath.Join(root, "GwentCoach", "training-navigation")
+	// Share the durable claim with training sessions and other input paths.
+	// An unresolved action must block navigation until reconciled.
+	n.InterlockDir = `D:\gwent-coach-training-local\training-autoplay-interlock`
 	capture := func() (navFrame, error) {
 		dir, e := os.MkdirTemp(out, "nav-frame-")
 		if e != nil {
