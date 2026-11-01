@@ -84,6 +84,20 @@ func actionWindow(a Action, ref report) (gameWindow, error) {
 }
 
 func Execute(out string, logger *log.Logger, a Action) (runErr error) {
+	receipt := InputReceipt{Outcome: "not_sent"}
+	published := false
+	publish := func() error {
+		published = true
+		if a.onReceipt != nil {
+			return a.onReceipt(receipt)
+		}
+		return nil
+	}
+	defer func() {
+		if !published {
+			runErr = errors.Join(runErr, publish())
+		}
+	}()
 	if err := a.Validate(); err != nil {
 		return err
 	}
@@ -118,7 +132,7 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 	if err != nil {
 		return err
 	}
-	if (a.Kind == "click" || a.Kind == "hold") && (a.X >= int(w.Client.Right-w.Client.Left) || a.Y >= int(w.Client.Bottom-w.Client.Top)) {
+	if (a.Kind == "click" || a.Kind == "hold" || a.Kind == "hover") && (a.X >= int(w.Client.Right-w.Client.Left) || a.Y >= int(w.Client.Bottom-w.Client.Top)) {
 		return fmt.Errorf("click outside game client")
 	}
 	dir, err := os.MkdirTemp(out, "action-")
@@ -126,12 +140,13 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 		return err
 	}
 	result := struct {
-		Action  Action `json:"action"`
-		Time    string `json:"time"`
-		Outcome string `json:"outcome"`
-		Sent    uint32 `json:"events_sent"`
-		Error   string `json:"error,omitempty"`
-	}{Action: a, Time: time.Now().UTC().Format(time.RFC3339Nano), Outcome: "not_sent"}
+		Action  Action        `json:"action"`
+		Time    string        `json:"time"`
+		Outcome string        `json:"outcome"`
+		Sent    uint32        `json:"events_sent"`
+		Error   string        `json:"error,omitempty"`
+		Receipt *InputReceipt `json:"receipt"`
+	}{Action: a, Time: time.Now().UTC().Format(time.RFC3339Nano), Outcome: "not_sent", Receipt: &receipt}
 	defer func() {
 		if runErr != nil {
 			result.Error = runErr.Error()
@@ -143,20 +158,27 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 		runErr = errors.Join(runErr, err)
 		logger.Printf("action=%s outcome=%s events=%d error=%s", dir, result.Outcome, result.Sent, result.Error)
 	}()
-	img, err := screenshot.Capture(int(w.Client.Left), int(w.Client.Top), int(w.Client.Right-w.Client.Left), int(w.Client.Bottom-w.Client.Top))
-	if err != nil {
-		return err
-	}
-	f, err := os.Create(filepath.Join(dir, "before.png"))
-	if err != nil {
-		return err
-	}
-	encodeErr := png.Encode(f, img)
-	if err := errors.Join(encodeErr, f.Close()); err != nil {
-		return err
+	// Autonomous actions already have a recent native-size report. Avoid
+	// re-encoding a second full PNG before the fresh semantic guard.
+	if a.Kind != "hover" && a.PhaseModel == "" {
+		img, err := screenshot.Capture(int(w.Client.Left), int(w.Client.Top), int(w.Client.Right-w.Client.Left), int(w.Client.Bottom-w.Client.Top))
+		if err != nil {
+			return err
+		}
+		f, err := os.Create(filepath.Join(dir, "before.png"))
+		if err != nil {
+			return err
+		}
+		encodeErr := png.Encode(f, img)
+		if err := errors.Join(encodeErr, f.Close()); err != nil {
+			return err
+		}
 	}
 	if _, err := actionWindow(a, ref); err != nil {
 		return err
+	}
+	if !a.deadline.IsZero() && !time.Now().Before(a.deadline) {
+		return fmt.Errorf("input deadline expired before cursor motion")
 	}
 	// Consume the reference before cursor motion, which itself can change UI state.
 	claim, err := os.OpenFile(a.Reference+".input-used", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -167,13 +189,14 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 		return err
 	}
 	var inputs [2]nativeInput
-	if a.Kind == "click" || a.Kind == "hold" {
+	if a.Kind == "click" || a.Kind == "hold" || a.Kind == "hover" {
 		x, y := w.Client.Left+int32(a.X), w.Client.Top+int32(a.Y)
 		result.Outcome = "cursor_move_attempted_requires_review"
 		r, _, err := user32.NewProc("SetCursorPos").Call(uintptr(x), uintptr(y))
 		if r == 0 {
 			return fmt.Errorf("SetCursorPos: %w", err)
 		}
+		receipt = InputReceipt{Outcome: "cursor_moved", DeliveredAt: time.Now()}
 		time.Sleep(100 * time.Millisecond)
 		if _, err := actionWindow(a, ref); err != nil {
 			return err
@@ -206,7 +229,7 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 	}
 	// Autonomous input rechecks semantic anchors immediately before the event.
 	if a.PhaseModel != "" {
-		if a.Kind != "click" || a.ExpectedPhase == "" {
+		if (a.Kind != "click" && a.Kind != "hold" && a.Kind != "hover") || a.ExpectedPhase == "" {
 			return fmt.Errorf("invalid semantic action")
 		}
 		if age := time.Since(observed); age < 0 || age > 2*time.Second {
@@ -220,9 +243,32 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 		if err != nil {
 			return err
 		}
-		phase, _ := model.Recognize(fresh)
+		phase, scores := model.Recognize(fresh)
+		if a.guardProbe || phase != a.ExpectedPhase {
+			path := filepath.Join(dir, "phase-guard.png")
+			f, saveErr := os.Create(path)
+			if saveErr == nil {
+				encodeErr := png.Encode(f, fresh)
+				saveErr = errors.Join(encodeErr, f.Close())
+			}
+			diagnostics, diagErr := json.MarshalIndent(struct {
+				Expected, Actual string
+				CursorX, CursorY int
+				Scores           []PhaseScore
+				Anchors          any
+			}{a.ExpectedPhase, phase, a.X, a.Y, scores, phaseAnchorDiagnostics(model, fresh)}, "", "  ")
+			if diagErr == nil {
+				diagErr = os.WriteFile(filepath.Join(dir, "phase-guard.json"), diagnostics, 0600)
+			}
+			if saveErr != nil || diagErr != nil {
+				return errors.Join(saveErr, diagErr)
+			}
+		}
 		if phase != a.ExpectedPhase {
 			return fmt.Errorf("semantic input guard rejected phase %q", phase)
+		}
+		if a.guardProbe {
+			return nil
 		}
 		if _, err = actionWindow(a, ref); err != nil {
 			return err
@@ -252,10 +298,28 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 			return fmt.Errorf("target covered before delivery")
 		}
 	}
+	if !a.deadline.IsZero() && !time.Now().Before(a.deadline) {
+		return fmt.Errorf("input deadline expired before delivery")
+	}
+	if a.Kind == "hover" {
+		// Hover changes UI state but sends no mouse button event. The resulting
+		// screenshot is evidence only; it does not confirm a card identity.
+		if err := publish(); err != nil {
+			return err
+		}
+		if a.primitiveOnly {
+			return nil
+		}
+		time.Sleep(900 * time.Millisecond)
+		return runSample(dir, logger, Sampling{JPEGQuality: 85})
+	}
 	if a.Kind == "hold" {
 		n, _, err := user32.NewProc("SendInput").Call(1, uintptr(unsafe.Pointer(&inputs[0])), unsafe.Sizeof(inputs[0]))
 		result.Sent = uint32(n)
 		result.Outcome = "unknown_requires_review"
+		if n > 0 {
+			receipt = InputReceipt{Outcome: "partial", EventsSent: uint32(n), DeliveredAt: time.Now()}
+		}
 		if n != 1 {
 			return fmt.Errorf("mouse down failed: %v", err)
 		}
@@ -269,26 +333,59 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 		}
 		n, _, err = user32.NewProc("SendInput").Call(1, uintptr(unsafe.Pointer(&inputs[1])), unsafe.Sizeof(inputs[1]))
 		result.Sent += uint32(n)
-		if n != 1 {
-			return errors.Join(holdErr, fmt.Errorf("mouse release failed: %v", err))
+		receipt.EventsSent = result.Sent
+		if n > 0 {
+			receipt.DeliveredAt = time.Now()
 		}
-		if holdErr != nil {
-			return holdErr
+		if n == 1 {
+			receipt.Outcome = "delivered"
+		}
+		receiptErr := publish()
+		if n != 1 {
+			return errors.Join(receiptErr, holdErr, fmt.Errorf("mouse release failed: %v", err))
+		}
+		if err := errors.Join(receiptErr, holdErr); err != nil {
+			return err
+		}
+		if a.primitiveOnly {
+			return nil
 		}
 		time.Sleep(900 * time.Millisecond)
+		if a.PhaseModel != "" {
+			return runSample(dir, logger, Sampling{JPEGQuality: 85})
+		}
 		return Run(dir, logger)
 	}
 	n, _, sendErr := user32.NewProc("SendInput").Call(2, uintptr(unsafe.Pointer(&inputs[0])), unsafe.Sizeof(inputs[0]))
 	result.Sent = uint32(n)
 	result.Outcome = "unknown_requires_review"
+	if n > 0 {
+		receipt = InputReceipt{Outcome: "partial", EventsSent: uint32(n), DeliveredAt: time.Now()}
+	}
 	if n != 2 {
 		if n == 1 {
-			user32.NewProc("SendInput").Call(1, uintptr(unsafe.Pointer(&inputs[1])), unsafe.Sizeof(inputs[1]))
+			released, _, _ := user32.NewProc("SendInput").Call(1, uintptr(unsafe.Pointer(&inputs[1])), unsafe.Sizeof(inputs[1]))
+			result.Sent += uint32(released)
+			receipt.EventsSent = result.Sent
+			if released > 0 {
+				receipt.DeliveredAt = time.Now()
+			}
 		}
-		return fmt.Errorf("SendInput sent %d/2 events; do not replay: %v", n, sendErr)
+		return errors.Join(publish(), fmt.Errorf("SendInput sent %d/2 events; do not replay: %v", n, sendErr))
+	}
+	receipt.Outcome = "delivered"
+	if err := publish(); err != nil {
+		return err
+	}
+	if a.primitiveOnly {
+		return nil
 	}
 	time.Sleep(900 * time.Millisecond)
-	if err := Run(filepath.Join(dir), logger); err != nil {
+	if a.PhaseModel != "" {
+		if err := runSample(dir, logger, Sampling{JPEGQuality: 85}); err != nil {
+			return err
+		}
+	} else if err := Run(filepath.Join(dir), logger); err != nil {
 		return err
 	}
 	logger.Printf("input delivered; inspect after screenshot in %s before another action", dir)

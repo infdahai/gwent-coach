@@ -17,7 +17,7 @@ func TestPhaseRejectsUnknownAndAmbiguity(t *testing.T) {
 	}
 	a := Anchor{X: 2, Y: 2, Width: 32, Height: 16, MaxError: .02}
 	a.Pixels = AnchorPixels(img, a, 96, 54)
-	m := PhaseModel{96, 54, []Phase{{"main", []Anchor{a, a}}}}
+	m := PhaseModel{Width: 96, Height: 54, Phases: []Phase{{Name: "main", Anchors: []Anchor{a, a}}}}
 	if e := m.Validate(); e != nil {
 		t.Fatal(e)
 	}
@@ -27,7 +27,7 @@ func TestPhaseRejectsUnknownAndAmbiguity(t *testing.T) {
 	if p, _ := m.Recognize(image.NewRGBA(img.Bounds())); p != "unknown" {
 		t.Fatal(p)
 	}
-	m.Phases = append(m.Phases, Phase{"modes", []Anchor{a, a}})
+	m.Phases = append(m.Phases, Phase{Name: "modes", Anchors: []Anchor{a, a}})
 	if p, _ := m.Recognize(img); p != "unknown" {
 		t.Fatal(p)
 	}

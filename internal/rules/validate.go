@@ -8,6 +8,11 @@ func (e *Engine) Validate(s State) error {
 	if s.Ruleset != "native-v1" || s.Turn < 0 || s.Turn > 1 || s.Round < 1 || s.Round > 3 || s.Revision < 0 || s.Winner < -1 || s.Winner > 1 {
 		return fmt.Errorf("invalid state header")
 	}
+	for p := 0; p < 2; p++ {
+		if s.StartingHighProvision[p] < 0 || s.StartingHighProvision[p] > 25 || (!s.StartingDeckKnown[p] && s.StartingHighProvision[p] != 0) {
+			return fmt.Errorf("invalid starting deck provisions")
+		}
+	}
 	if s.Wins[0] < 0 || s.Wins[1] < 0 || s.Wins[0] > 2 || s.Wins[1] > 2 {
 		return fmt.Errorf("invalid round wins")
 	}
@@ -55,6 +60,12 @@ func (e *Engine) Validate(s State) error {
 		}
 		switch c.Zone {
 		case Board:
+			if c.CardID == 202140 {
+				if c.Row < 0 || c.Row > 1 || c.Power != 0 || c.Armor != 0 {
+					return fmt.Errorf("invalid stratagem")
+				}
+				continue
+			}
 			if c.Row < 0 || c.Row > 1 || c.Power == 0 || e.catalog.Cards[c.CardID].Attributes.Type != "Unit" {
 				return fmt.Errorf("invalid board unit")
 			}

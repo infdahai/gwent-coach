@@ -8,6 +8,13 @@ import (
 	"testing"
 )
 
+func TestSemanticActionJSONUnwrapsPlan(t *testing.T) {
+	b, err := semanticActionJSON(map[string]any{"Action": map[string]any{"Kind": "play", "Card": "wolf"}, "Inputs": []any{}})
+	if err != nil || string(b) != `{"Card":"wolf","Kind":"play"}` {
+		t.Fatalf("action=%s err=%v", b, err)
+	}
+}
+
 func TestIngestionRestartAndRejection(t *testing.T) {
 	root := t.TempDir()
 	inbox := filepath.Join(root, "inbox")

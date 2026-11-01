@@ -3,6 +3,7 @@
 package cardmatch
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"math/bits"
@@ -51,6 +52,8 @@ func (f Feature) valid() bool {
 
 // Normalize area-averages the caller's art rectangle into 9x8 grayscale cells.
 // Coordinates are in the original image; no implicit crop or coordinate transform occurs.
+var ErrDegenerateArt = errors.New("blank or degenerate normalized art")
+
 func Normalize(img image.Image, roi ROI) (Feature, error) {
 	var f Feature
 	if img == nil {
@@ -67,7 +70,20 @@ func Normalize(img image.Image, roi ROI) (Feature, error) {
 			var sum, count uint64
 			for py := y0; py < y1; py++ {
 				for px := x0; px < x1; px++ {
-					r, g, b, a := img.At(px, py).RGBA()
+					var r, g, b, a uint32
+					switch src := img.(type) {
+					case *image.RGBA:
+						i := src.PixOffset(px, py)
+						r, g, b, a = uint32(src.Pix[i])*257, uint32(src.Pix[i+1])*257, uint32(src.Pix[i+2])*257, uint32(src.Pix[i+3])*257
+					case *image.NRGBA:
+						i := src.PixOffset(px, py)
+						a = uint32(src.Pix[i+3]) * 257
+						if a == 65535 {
+							r, g, b = uint32(src.Pix[i])*257, uint32(src.Pix[i+1])*257, uint32(src.Pix[i+2])*257
+						}
+					default:
+						r, g, b, a = img.At(px, py).RGBA()
+					}
 					if a != 65535 {
 						return f, fmt.Errorf("art ROI contains transparency")
 					}
@@ -79,7 +95,7 @@ func Normalize(img image.Image, roi ROI) (Feature, error) {
 		}
 	}
 	if !f.valid() {
-		return Feature{}, fmt.Errorf("blank or degenerate normalized art")
+		return Feature{}, ErrDegenerateArt
 	}
 	return f, nil
 }

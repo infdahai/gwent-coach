@@ -142,6 +142,25 @@ func ReplayActions(events []Event) ([]ActionTrace, error) {
 			if !known {
 				standalone[key] = *step
 			}
+		case "action_auto_ended":
+			if !known || active[e.MatchID] != key || traces[i].Delivered != nil || len(traces[i].Steps) == 0 || e.StateVersion == nil || *e.StateVersion != *traces[i].Intent.StateVersion || e.FramePath == nil || e.CapturedAt == nil {
+				return fail(e, "automatic end lacks active delivered input")
+			}
+			last := traces[i].Steps[len(traces[i].Steps)-1]
+			if !fullStep(last) {
+				return fail(e, "automatic end lacks full receipt")
+			}
+			captured, err := time.Parse(time.RFC3339Nano, *e.CapturedAt)
+			if err != nil {
+				return fail(e, "invalid automatic end timestamp")
+			}
+			delivered, err := time.Parse(time.RFC3339Nano, *last.Receipt.DeliveredAt)
+			if err != nil {
+				return fail(e, "invalid input timestamp")
+			}
+			if err = ValidateConfirmation(e.MatchID, *e.FramePath, captured, e.ConfirmationFrames, delivered); err != nil {
+				return fail(e, err.Error())
+			}
 		case "action_delivered":
 			if !known {
 				return fail(e, "delivery has no original action")

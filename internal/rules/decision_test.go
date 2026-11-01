@@ -1,7 +1,6 @@
 package rules
 
 import (
-	"context"
 	"errors"
 	"gwentcoachmvp/internal/cards"
 	"runtime"
@@ -24,7 +23,7 @@ func decisionFixture(t testing.TB) (*DecisionService, State, DecisionInput) {
 		t.Fatal(err)
 	}
 	v, _ := s.View(0)
-	in := DecisionInput{MatchID: "match", Phase: "turn", Player: 0, View: v, Deadline: time.Now().Add(time.Second), Candidates: []Action{{Kind: "play", Card: s.Cards[0].ID}, {Kind: "pass"}}}
+	in := DecisionInput{MatchID: "match", Phase: "turn", Player: 0, View: v, HandOrder: []string{s.Cards[0].ID, s.Cards[1].ID}, Deadline: time.Now().Add(time.Second), Candidates: []Action{{Kind: "play", Card: s.Cards[0].ID}, {Kind: "pass"}}}
 	return NewDecisionService(e), s, in
 }
 func TestDecisionFastAndPublicBoundary(t *testing.T) {
@@ -55,6 +54,94 @@ func TestDecisionFastAndPublicBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestDecisionLeftmost(t *testing.T) {
+	d, s, in := decisionFixture(t)
+	defer d.Close()
+	s.Cards[1].CardID = s.Cards[0].CardID
+	s.Cards[1].Power = s.Cards[0].Power
+	s.Cards[1].Armor = s.Cards[0].Armor
+	in.View, _ = s.View(0)
+	in.HandOrder = []string{s.Cards[1].ID, s.Cards[0].ID}
+	in.Candidates = []Action{{Kind: "play", Card: s.Cards[0].ID}, {Kind: "play", Card: s.Cards[1].ID}, {Kind: "pass"}}
+	fast, err := d.Fast(in)
+	if err != nil || fast.Card != s.Cards[1].ID {
+		t.Fatalf("fast leftmost: %+v %v", fast, err)
+	}
+	if err := d.Start(in); err != nil {
+		t.Fatal(err)
+	}
+	completed := false
+	for time.Now().Before(in.Deadline) {
+		if action, err := d.Poll(in); err == nil {
+			if action != fast {
+				t.Fatalf("worker action %+v differs from fast %+v", action, fast)
+			}
+			completed = true
+			break
+		}
+		runtime.Gosched()
+	}
+	if !completed {
+		t.Fatal("worker did not produce a decision")
+	}
+	in.Candidates = []Action{{Kind: "play", Card: s.Cards[0].ID}, {Kind: "pass"}}
+	if action, err := d.Fast(in); err != nil || action.Card != s.Cards[0].ID {
+		t.Fatalf("expected next legal card: %+v %v", action, err)
+	}
+	in.HandOrder = []string{s.Cards[1].ID, s.Cards[1].ID}
+	if _, err := d.Fast(in); err == nil {
+		t.Fatal("accepted incomplete hand order")
+	}
+	for i := range s.Cards {
+		if s.Cards[i].Owner == 0 && s.Cards[i].Zone == Hand {
+			s.Cards[i].Zone = Graveyard
+		}
+	}
+	in.View, _ = s.View(0)
+	in.HandOrder = nil
+	in.Candidates = []Action{{Kind: "pass"}}
+	if action, err := d.Fast(in); err != nil || action.Kind != "pass" {
+		t.Fatalf("empty hand: %+v %v", action, err)
+	}
+}
+
+func TestPassWithCardsRequiresOptInAndNoOpponentPass(t *testing.T) {
+	d, _, input := decisionFixture(t)
+	defer d.Close()
+	input.Candidates = []Action{{Kind: "pass"}}
+	if _, err := d.Fast(input); err == nil {
+		t.Fatal("pass was not opt-in")
+	}
+	input.AllowPassWithCards = true
+	if action, err := d.Fast(input); err != nil || action.Kind != "pass" {
+		t.Fatalf("pass=%+v err=%v", action, err)
+	}
+	input.View.Visible = append(input.View.Visible, rulesOpaqueEnemy("opaque", 2, 0))
+	input.View.Score[1] = 2
+	input.Candidates = []Action{{Kind: "pass"}}
+	if action, err := d.Fast(input); err != nil || action.Kind != "pass" {
+		t.Fatalf("opaque pass=%+v err=%v", action, err)
+	}
+	input.View.Passed[1] = true
+	if _, err := d.Fast(input); err == nil {
+		t.Fatal("accepted round-ending pass with opaque board")
+	}
+}
+
+func TestDecisionWithTacticalAdvantageOnBoard(t *testing.T) {
+	d, _, in := decisionFixture(t)
+	defer d.Close()
+	in.View.Visible = append(in.View.Visible, Instance{ID: "stratagem", CardID: 202140, Owner: 0, Zone: Board, Row: 1})
+	if action, err := d.Fast(in); err != nil || action.Kind != "play" {
+		t.Fatalf("decision=%+v err=%v", action, err)
+	}
+	in.View.Visible[len(in.View.Visible)-1].Power = 1
+	in.View.Score[0] = 1
+	if _, err := d.Fast(in); err == nil {
+		t.Fatal("accepted modified stratagem")
+	}
+}
+
 func TestDecisionSlow(t *testing.T) {
 	d, _, in := decisionFixture(t)
 	defer d.Close()
@@ -191,32 +278,150 @@ func TestDecisionTimeoutFallbackAndHiddenEquivalence(t *testing.T) {
 
 func TestDecisionRestartCancellation(t *testing.T) {
 	d, _, in := decisionFixture(t)
+	if err := d.Start(in); err != nil {
+		t.Fatal(err)
+	}
+	latest := copyInput(in)
+	latest.MatchID = "latest"
+	latest.Candidates = []Action{{Kind: "play", Card: latest.HandOrder[0]}}
+	if err := d.Start(latest); err != nil {
+		t.Fatal(err)
+	}
+	for time.Now().Before(latest.Deadline) {
+		if _, err := d.Poll(in); err == nil {
+			t.Fatal("superseded result accepted")
+		}
+		if action, err := d.Poll(latest); err == nil {
+			if action.Kind != "play" || action.Card != latest.HandOrder[0] {
+				t.Fatalf("unexpected action: %+v", action)
+			}
+			d.Close()
+			if err := d.Start(in); err == nil {
+				t.Fatal("closed service restarted")
+			}
+			return
+		}
+		runtime.Gosched()
+	}
+	d.Close()
+	t.Fatal("latest analysis did not complete")
+}
+
+func TestDecisionSessionDeduplicatesObservations(t *testing.T) {
+	d, _, in := decisionFixture(t)
 	defer d.Close()
-	// Model a worker that has not yet observed cancellation so restart cannot
-	// accumulate unbounded concurrent workers.
-	ctx, cancel := context.WithCancel(context.Background())
-	d.mu.Lock()
-	d.running = true
-	d.cancel = cancel
-	d.mu.Unlock()
-	if err := d.Start(in); err == nil {
-		t.Fatal("restart accepted while worker active")
+	done := d.done
+	if err := d.Start(in); err != nil {
+		t.Fatal(err)
 	}
-	select {
-	case <-ctx.Done():
-	default:
-		t.Fatal("worker not canceled")
+	completed := false
+	for time.Now().Before(in.Deadline) {
+		if _, err := d.Poll(in); err == nil {
+			completed = true
+			break
+		}
+		runtime.Gosched()
+	}
+	if !completed {
+		t.Fatal("analysis did not complete")
 	}
 	d.mu.Lock()
-	d.running = false
-	d.cancel = nil
+	generation := d.generation
 	d.mu.Unlock()
 	if err := d.Start(in); err != nil {
 		t.Fatal(err)
 	}
-	d.Close()
+	d.mu.Lock()
+	if d.generation != generation || d.pending != nil || d.done != done {
+		d.mu.Unlock()
+		t.Fatal("identical observation restarted analysis or worker")
+	}
+	d.mu.Unlock()
 	if _, err := d.Poll(in); err == nil {
-		t.Fatal("canceled result accepted")
+		t.Fatal("consumed action returned again")
+	}
+	changed := copyInput(in)
+	changed.Deadline = in.Deadline.Add(time.Second)
+	if err := d.Start(changed); err == nil {
+		t.Fatal("same observation accepted with a different deadline")
+	}
+	select {
+	case <-done:
+		t.Fatal("worker exited between observations")
+	default:
+	}
+}
+
+func TestDecisionInvalidate(t *testing.T) {
+	d, _, in := decisionFixture(t)
+	defer d.Close()
+	if err := d.Start(in); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		d.mu.Lock()
+		ready := d.result != nil
+		d.mu.Unlock()
+		if ready {
+			break
+		}
+		if !time.Now().Before(in.Deadline) {
+			t.Fatal("analysis did not complete")
+		}
+		runtime.Gosched()
+	}
+	d.Invalidate()
+	if _, err := d.Poll(in); err == nil {
+		t.Fatal("invalidated result accepted")
+	}
+	if err := d.Start(in); err != nil {
+		t.Fatal(err)
+	}
+	for time.Now().Before(in.Deadline) {
+		if _, err := d.Poll(in); err == nil {
+			return
+		}
+		runtime.Gosched()
+	}
+	t.Fatal("worker did not resume after invalidation")
+}
+
+func TestDecisionInvalidUpdateCancelsPrevious(t *testing.T) {
+	d, _, in := decisionFixture(t)
+	defer d.Close()
+	if err := d.Start(in); err != nil {
+		t.Fatal(err)
+	}
+	invalid := copyInput(in)
+	invalid.View.Finished = true
+	if err := d.Start(invalid); err == nil {
+		t.Fatal("invalid update accepted")
+	}
+	if _, err := d.Poll(in); err == nil {
+		t.Fatal("result from superseded observation accepted")
+	}
+}
+
+func TestDecisionCloseWaitsForWorker(t *testing.T) {
+	d, _, in := decisionFixture(t)
+	in.Candidates = make([]Action, 10000)
+	for i := range in.Candidates {
+		in.Candidates[i] = Action{Kind: "pass"}
+	}
+	if err := d.Start(in); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+	d.mu.Lock()
+	done := d.done
+	d.mu.Unlock()
+	select {
+	case <-done:
+	default:
+		t.Fatal("worker did not exit")
+	}
+	if _, err := d.Poll(in); err == nil {
+		t.Fatal("closed service returned a result")
 	}
 }
 
@@ -242,7 +447,9 @@ func TestDecisionAvoidsConcedingWhenPlayAvailable(t *testing.T) {
 			if a.Kind != "play" {
 				t.Fatalf("conceded: %+v", a)
 			}
-			if err := d.Start(in); err != nil {
+			changed := copyInput(in)
+			changed.MatchID = "next"
+			if err := d.Start(changed); err != nil {
 				t.Fatalf("restart after result: %v", err)
 			}
 			return

@@ -43,6 +43,23 @@ type item struct {
 	traces []matchlog.ActionTrace
 }
 
+func semanticActionJSON(intent any) ([]byte, error) {
+	data, err := json.Marshal(intent)
+	if err != nil {
+		return nil, err
+	}
+	var envelope struct {
+		Action json.RawMessage `json:"Action"`
+	}
+	if err = json.Unmarshal(data, &envelope); err != nil {
+		return nil, err
+	}
+	if len(envelope.Action) != 0 {
+		return envelope.Action, nil
+	}
+	return data, nil
+}
+
 func validate(id string, data []byte) (item, error) {
 	if len(data) == 0 || data[len(data)-1] != '\n' {
 		return item{}, fmt.Errorf("empty or partial event stream")
@@ -296,7 +313,7 @@ func compute(c Config) error {
 			if t.Intent.ActionDomain == "gameplay" && t.Confirmed != nil {
 				target.Actions++
 				if target == &train {
-					b, err := json.Marshal(t.Intent.ActionIntent)
+					b, err := semanticActionJSON(t.Intent.ActionIntent)
 					if err != nil {
 						return err
 					}

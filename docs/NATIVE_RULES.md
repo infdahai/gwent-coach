@@ -31,7 +31,7 @@ Tracker currently adapts simulations and requires a full-information initial sta
 1. Add mode profiles with verified sources for ties, starting players, automatic draws, mulligans, and third-round rules in standard and seasonal modes. Version each mode independently.
 2. Introduce unknown instances and count constraints into observation state. Process newly drawn cards, random results, and opponent actions incrementally; request local or full recalibration only on inconsistencies. Integrate the existing input ledger while retaining semantic confirmation.
 3. Expand explicit effects card by card: Lock, Bleeding, Poison, status copying, summoning, spawning, banishing, and turn triggers. Require source-text comparison and normal, boundary, and failure tests before changing coverage status. Keyword recognition alone cannot establish support.
-4. Add legal-action enumeration, bounded search with best-of-three terminal rewards, opponent sampling using only public views, and self-play evaluation for supported decks. There is currently no decision optimization or win-rate claim. Future reinforcement learning should reuse Apply/Replay and separate privileged training state from policy observations.
+4. Connect the restricted public-view legal-action enumerator to a validated live state estimator, then add bounded search with best-of-three terminal rewards, opponent sampling using only public views, and self-play evaluation for supported decks. Enumeration is an offline engine capability, not proof that observed client actions are legal or executable. There is currently no win-rate claim. Future reinforcement learning should reuse Apply/Replay and separate privileged training state from policy observations.
 
 ## Public release checks
 

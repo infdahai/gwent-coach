@@ -7,8 +7,8 @@ func TestActionKinds(t *testing.T) {
 		kind    string
 		allowed bool
 	}{
-		{"click", true}, {"hold", true}, {"escape", true},
-		{"hover", false}, {"scroll-down", false}, {"", false}, {"wheel", false},
+		{"click", true}, {"hold", true}, {"hover", true}, {"escape", true},
+		{"scroll-down", false}, {"", false}, {"wheel", false},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			a := Action{Kind: tc.kind, Reference: "report.json", StopFile: "pause"}

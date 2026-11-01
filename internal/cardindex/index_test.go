@@ -47,7 +47,7 @@ func TestPersistence(t *testing.T) {
 				t.Fatal("unsupported handler")
 			}
 		}
-		if supportedCount != 6 {
+		if supportedCount != 10 {
 			t.Fatal(supportedCount)
 		}
 		card, handler, supported, ok := i.Lookup(113301, "en")
