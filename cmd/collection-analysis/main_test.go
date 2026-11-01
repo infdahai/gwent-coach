@@ -131,6 +131,34 @@ func TestImportCollectionsIncremental(t *testing.T) {
 	}
 }
 
+func TestImportCollectionsContinuesAfterConflict(t *testing.T) {
+	root := t.TempDir()
+	source, dest := filepath.Join(root, "source"), filepath.Join(root, "dest")
+	for _, name := range []string{"readonly-collection-a", "readonly-collection-b"} {
+		dir := filepath.Join(source, name)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		line := `{"trust":"unverified_candidate_not_for_actions","reference":"frame","captured_at":"2026-01-01T00:00:00Z","scalars":{},"unknown":[]}` + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "recognition.jsonl"), []byte(line), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(dest, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "readonly-collection-a.jsonl"), []byte("conflict"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := importCollections(source, dest, &out); err == nil || !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("missing conflict: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "readonly-collection-b.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAnalyzeRejectsInvalidRecords(t *testing.T) {
 	valid := `{"trust":"unverified_candidate_not_for_actions","reference":"frame","captured_at":"2026-01-01T00:00:00Z","scalars":{"score":1},"unknown":[]}`
 	for _, input := range []string{

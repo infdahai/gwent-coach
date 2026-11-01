@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,36 @@ func TestPullOnceWithSSHTransport(t *testing.T) {
 	}
 }
 
+func TestPulledRunsIsolateFailuresAndLargeStreams(t *testing.T) {
+	dest := t.TempDir()
+	line := `{"trust":"unverified_candidate_not_for_actions","reference":"frame","captured_at":"2026-01-01T00:00:00Z","scalars":{},"unknown":[]}` + "\n"
+	if err := os.WriteFile(filepath.Join(dest, "readonly-collection-conflict.jsonl"), []byte(line+line), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stream bytes.Buffer
+	encoder := json.NewEncoder(&stream)
+	for _, item := range []pulledRun{{Name: "readonly-collection-oversize", Error: "collection exceeds 16 MiB"}, {Name: "readonly-collection-conflict", Data: []byte(line)}} {
+		if err := encoder.Encode(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The aggregate stream exceeds the former 64 MiB limit, while each run is small.
+	for i := 0; i < 70; i++ {
+		data := []byte(line + strings.Repeat(" ", 1<<20))
+		if err := encoder.Encode(pulledRun{Name: fmt.Sprintf("readonly-collection-%03d", i), Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	err := processPulled(&stream, dest, &out)
+	if err == nil || !strings.Contains(err.Error(), "oversize") || !strings.Contains(err.Error(), "conflict") {
+		t.Fatalf("missing batch errors: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "readonly-collection-069.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProcessPulledCollections(t *testing.T) {
 	dest := t.TempDir()
 	line := `{"trust":"unverified_candidate_not_for_actions","reference":"frame","captured_at":"2026-01-01T00:00:00Z","scalars":{"score":0},"unknown":[]}` + "\n"
@@ -67,7 +98,7 @@ func TestProcessPulledCollections(t *testing.T) {
 		}
 		return b.String()
 	}
-	first := encode(pulledRun{"readonly-collection-1", []byte(line + "{")})
+	first := encode(pulledRun{Name: "readonly-collection-1", Data: []byte(line + "{")})
 	var out bytes.Buffer
 	if err := processPulled(strings.NewReader(first), dest, &out); err != nil {
 		t.Fatal(err)
@@ -80,7 +111,7 @@ func TestProcessPulledCollections(t *testing.T) {
 	if err != nil || string(got) != line {
 		t.Fatalf("%s %v", got, err)
 	}
-	next := encode(pulledRun{"readonly-collection-1", []byte(line + line)})
+	next := encode(pulledRun{Name: "readonly-collection-1", Data: []byte(line + line)})
 	if err := processPulled(strings.NewReader(next), dest, &out); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +121,7 @@ func TestProcessPulledCollections(t *testing.T) {
 	if err := processPulled(strings.NewReader(first), dest, &out); err == nil {
 		t.Fatal("accepted truncated source")
 	}
-	for _, bad := range []string{`{`, encode(pulledRun{"readonly-collection-../bad", []byte(line)}), encode(pulledRun{"readonly-collection-1", []byte(line)}, pulledRun{"readonly-collection-1", []byte(line)})} {
+	for _, bad := range []string{`{`, encode(pulledRun{Name: "readonly-collection-../bad", Data: []byte(line)}), encode(pulledRun{Name: "readonly-collection-1", Data: []byte(line)}, pulledRun{Name: "readonly-collection-1", Data: []byte(line)})} {
 		if err := processPulled(strings.NewReader(bad), dest, &out); err == nil {
 			t.Fatal("accepted invalid response")
 		}

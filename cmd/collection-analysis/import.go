@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -52,72 +53,80 @@ func importCollections(source, dest string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for _, entry := range entries {
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "readonly-collection-") {
 			continue
 		}
-		path := filepath.Join(source, entry.Name(), "recognition.jsonl")
-		info, err := os.Lstat(path)
-		if os.IsNotExist(err) {
-			continue
+		if err := importCollection(source, dest, entry.Name(), out); err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", entry.Name(), err))
 		}
-		if err != nil {
-			return err
+	}
+	return errors.Join(failures...)
+}
+
+func importCollection(source, dest, runName string, out io.Writer) error {
+	path := filepath.Join(source, runName, "recognition.jsonl")
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	end := bytes.LastIndexByte(data, '\n')
+	data = data[:end+1]
+	if len(data) > 0 {
+		if _, err := analyze(bytes.NewReader(data)); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
 		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("%s is not a regular file", path)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		end := bytes.LastIndexByte(data, '\n')
-		data = data[:end+1]
-		if len(data) > 0 {
-			if _, err := analyze(bytes.NewReader(data)); err != nil {
-				return fmt.Errorf("%s: %w", path, err)
-			}
-		}
-		target := filepath.Join(dest, entry.Name()+".jsonl")
-		targetInfo, statErr := os.Lstat(target)
-		if statErr != nil && !os.IsNotExist(statErr) {
-			return statErr
-		}
-		if statErr == nil && !targetInfo.Mode().IsRegular() {
-			return fmt.Errorf("%s is not a regular file", target)
-		}
-		previous, err := os.ReadFile(target)
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		if !bytes.HasPrefix(data, previous) {
-			return fmt.Errorf("%s: source conflicts with imported records", path)
-		}
-		if bytes.Equal(data, previous) {
-			continue
-		}
-		tmp, err := os.CreateTemp(dest, ".collection-*")
-		if err != nil {
-			return err
-		}
-		name := tmp.Name()
-		_, writeErr := tmp.Write(data)
-		closeErr := tmp.Close()
-		if writeErr != nil {
-			os.Remove(name)
-			return writeErr
-		}
-		if closeErr != nil {
-			os.Remove(name)
-			return closeErr
-		}
-		if err := os.Rename(name, target); err != nil {
-			os.Remove(name)
-			return err
-		}
-		if _, err := fmt.Fprintf(out, "%s: imported %d bytes\n", entry.Name(), len(data)-len(previous)); err != nil {
-			return err
-		}
+	}
+	target := filepath.Join(dest, runName+".jsonl")
+	targetInfo, statErr := os.Lstat(target)
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return statErr
+	}
+	if statErr == nil && !targetInfo.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", target)
+	}
+	previous, err := os.ReadFile(target)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if !bytes.HasPrefix(data, previous) {
+		return fmt.Errorf("%s: source conflicts with imported records", path)
+	}
+	if bytes.Equal(data, previous) {
+		return nil
+	}
+	tmp, err := os.CreateTemp(dest, ".collection-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	_, writeErr := tmp.Write(data)
+	closeErr := tmp.Close()
+	if writeErr != nil {
+		os.Remove(name)
+		return writeErr
+	}
+	if closeErr != nil {
+		os.Remove(name)
+		return closeErr
+	}
+	if err := os.Rename(name, target); err != nil {
+		os.Remove(name)
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "%s: imported %d bytes\n", runName, len(data)-len(previous)); err != nil {
+		return err
 	}
 	return nil
 }
