@@ -20,11 +20,12 @@ var ErrObservation = errors.New("invalid or conflicting observation")
 // caller-defined public observation data for the selected policy. Deadline must
 // be made from time.Now().Add and retained unchanged for the revision.
 type Observation struct {
-	MatchID    string
-	Revision   uint64
-	Deadline   time.Time
-	State      []byte
-	Candidates []string
+	MatchID       string
+	PolicyVersion string
+	Revision      uint64
+	Deadline      time.Time
+	State         []byte
+	Candidates    []string
 }
 
 // Policy may inspect the copied observation and choose a candidate ID. It must
@@ -36,24 +37,30 @@ type Policy interface {
 // Service accepts one match's ordered observations. Calls to Start and Invalidate
 // must be serialized in observation order. Validate and execution are caller-owned.
 type Service struct {
-	mu         sync.Mutex
-	policy     Policy
-	match      string
-	last       *Observation
-	active     bool
-	consumed   bool
-	generation uint64
-	pending    *Observation
-	result     string
-	cancel     context.CancelFunc
-	wake       chan struct{}
-	done       chan struct{}
-	closed     bool
+	mu            sync.Mutex
+	policy        Policy
+	policyVersion string
+	match         string
+	last          *Observation
+	active        bool
+	consumed      bool
+	generation    uint64
+	pending       *Observation
+	result        string
+	cancel        context.CancelFunc
+	wake          chan struct{}
+	done          chan struct{}
+	closed        bool
 }
 
 // New starts one session worker. A nil policy uses the ordered fallback only.
 func New(policy Policy) *Service {
-	s := &Service{policy: policy, wake: make(chan struct{}, 1), done: make(chan struct{})}
+	return NewVersioned(policy, "")
+}
+
+// NewVersioned binds a service and all its observations to a policy version for one match.
+func NewVersioned(policy Policy, version string) *Service {
+	s := &Service{policy: policy, policyVersion: version, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	go s.run()
 	return s
 }
@@ -65,7 +72,7 @@ func clone(o Observation) Observation {
 }
 
 func same(a, b Observation) bool {
-	return a.MatchID == b.MatchID && a.Revision == b.Revision && a.Deadline == b.Deadline && bytes.Equal(a.State, b.State) && slices.Equal(a.Candidates, b.Candidates)
+	return a.MatchID == b.MatchID && a.PolicyVersion == b.PolicyVersion && a.Revision == b.Revision && a.Deadline == b.Deadline && bytes.Equal(a.State, b.State) && slices.Equal(a.Candidates, b.Candidates)
 }
 
 func valid(o Observation) bool {
@@ -101,7 +108,7 @@ func (s *Service) Start(o Observation) error {
 	if s.closed {
 		return ErrClosed
 	}
-	if !valid(o) || (s.match != "" && o.MatchID != s.match) {
+	if !valid(o) || o.PolicyVersion != s.policyVersion || (s.match != "" && o.MatchID != s.match) {
 		s.invalidateLocked()
 		return ErrObservation
 	}
