@@ -150,7 +150,7 @@ func TestPartialResultConfirmsPassAfterDelivery(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := &receiptSink{}
 			j := NewActionJournal(sink)
-			frames := make(chan SemanticObservation, 1)
+			frames := make(chan SemanticObservation, 2)
 			first := true
 			adapter := nativeLoopAdapter{before: SemanticObservation{View: rules.View{Round: 3}}}
 			results := 0
@@ -178,14 +178,13 @@ func TestPartialResultConfirmsPassAfterDelivery(t *testing.T) {
 					}
 					secondAt := at.Add(2 * time.Nanosecond)
 					frames <- SemanticObservation{Source: "result", MatchID: "m", Phase: "result", CapturedAt: secondAt, CalibrationID: "cal", Frames: []matchlog.FrameEvidence{{Source: "prior", MatchID: "m", CapturedAt: firstAt}, {Source: "result", MatchID: "m", CapturedAt: secondAt}}, Result: true, PartialResult: &stateestimate.OutcomeFacts{Finished: true, Winner: 1}}
+					if tc.beforeDelivery {
+						frames <- SemanticObservation{Source: "result2", MatchID: "m", Phase: "result", CapturedAt: at.Add(4 * time.Nanosecond), CalibrationID: "cal", Frames: []matchlog.FrameEvidence{{Source: "result", MatchID: "m", CapturedAt: secondAt}, {Source: "result2", MatchID: "m", CapturedAt: at.Add(4 * time.Nanosecond)}}, Result: true, PartialResult: &stateestimate.OutcomeFacts{Finished: true, Winner: 1}}
+					}
 					return err
 				}, Confirm: adapter.confirm, OnResult: func(SemanticObservation) { results++ }}
 			err := loop.Run(context.Background())
-			if tc.beforeDelivery {
-				if err == nil || results != 0 || j.Pending() == nil {
-					t.Fatalf("stale result: err=%v results=%d", err, results)
-				}
-			} else if err != nil || results != 1 || j.Pending() != nil || j.result == nil || *j.result != "loss" {
+			if err != nil || results != 1 || j.Pending() != nil || j.result == nil || *j.result != "loss" {
 				t.Fatalf("pass result: err=%v results=%d pending=%+v result=%v", err, results, j.Pending(), j.result)
 			}
 		})

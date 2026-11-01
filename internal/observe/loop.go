@@ -350,6 +350,16 @@ func (l LocalLoop) Run(ctx context.Context) (runErr error) {
 			if time.Since(o.CapturedAt) < 0 || time.Since(o.CapturedAt) > 2*time.Second || (o.PartialResult != nil && time.Since(o.Frames[0].CapturedAt) > 2*time.Second) {
 				return fmt.Errorf("missing or stale semantic observation")
 			}
+			if pending != nil {
+				if o.MatchID != pendingMatch {
+					return fmt.Errorf("match changed with an unresolved action")
+				}
+				// Invalid terminal evidence must not alter the published state:
+				// a later pair may contain the same result with fresh captures.
+				if o.PartialResult != nil && (pending.Kind != "pass" || matchlog.ValidateConfirmation(o.MatchID, o.Source, o.CapturedAt, o.Frames, deliveredAt) != nil) {
+					continue
+				}
+			}
 			state, err := semanticState(o)
 			if err != nil {
 				return err
@@ -372,14 +382,6 @@ func (l LocalLoop) Run(ctx context.Context) (runErr error) {
 				active = nil
 			}
 			if pending != nil {
-				if o.MatchID != pendingMatch {
-					return fmt.Errorf("match changed with an unresolved action")
-				}
-				// Only pass has a native terminal-result postcondition. Both captures
-				// must follow delivery, even when no journal is attached.
-				if o.PartialResult != nil && (pending.Kind != "pass" || matchlog.ValidateConfirmation(o.MatchID, o.Source, o.CapturedAt, o.Frames, deliveredAt) != nil) {
-					continue
-				}
 				if !changed || !l.Confirm(*pending, o) {
 					continue
 				}
