@@ -95,7 +95,7 @@ func TestLocalLoopUsesStrategyAdapterAndConfirmsOnce(t *testing.T) {
 	if err := loop.Run(ctx); err != nil || sends != 1 {
 		t.Fatalf("err=%v sends=%d", err, sends)
 	}
-	if len(sink.events) != 6 || sink.events[4].EventType != "action_confirmed" || sink.events[5].EventType != "result_observed" {
+	if len(sink.events) != 7 || sink.events[3].EventType != "input_completed" || sink.events[5].EventType != "action_confirmed" || sink.events[6].EventType != "result_observed" {
 		t.Fatalf("events=%+v", sink.events)
 	}
 }
