@@ -34,6 +34,7 @@ type EvidenceCalibration struct {
 	Totals  *FactCalibration[stateestimate.TotalsFacts]
 	Cards   *FactCalibration[stateestimate.CardsFacts]
 	Outcome *FactCalibration[stateestimate.OutcomeFacts]
+	Targets []*FactCalibration[stateestimate.Target]
 }
 
 // CalibratedEvidenceReader is an immutable, restricted labelled-template
@@ -52,6 +53,19 @@ func NewCalibratedEvidenceReader(cal EvidenceCalibration) (*CalibratedEvidenceRe
 	for _, err := range []error{validateFactCalibration(cal.Round, w, h), validateFactCalibration(cal.Turn, w, h), validateFactCalibration(cal.Totals, w, h), validateFactCalibration(cal.Cards, w, h), validateFactCalibration(cal.Outcome, w, h)} {
 		if err != nil {
 			return nil, err
+		}
+	}
+	for _, target := range cal.Targets {
+		if target == nil {
+			return nil, fmt.Errorf("nil target calibration")
+		}
+		if err := validateFactCalibration(target, w, h); err != nil {
+			return nil, err
+		}
+		for _, value := range target.Values {
+			if (value.Kind != "control" && value.Kind != "hand-instance" && value.Kind != "row" && value.Kind != "board-target") || value.ID == "" || value.LayoutID == "" || value.Bounds.Empty() || !value.Bounds.In(image.Rect(0, 0, w, h)) {
+				return nil, fmt.Errorf("invalid target calibration")
+			}
 		}
 	}
 	data, err := json.Marshal(cal)
@@ -155,5 +169,11 @@ func (r *CalibratedEvidenceReader) readFacts(frame stateestimate.FrameRef, img i
 		facts.Cards.Visible = append(facts.Cards.Visible[:0:0], facts.Cards.Visible...)
 		facts.Cards.HandOrder = append(facts.Cards.HandOrder[:0:0], facts.Cards.HandOrder...)
 	}
-	return stateestimate.Evidence{Frame: frame, CalibrationID: r.id, Stage: stage, Facts: facts}
+	var targets []stateestimate.Target
+	for _, cal := range r.cal.Targets {
+		if target := readFact(cal, img); target != nil {
+			targets = append(targets, *target)
+		}
+	}
+	return stateestimate.Evidence{Frame: frame, CalibrationID: r.id, Stage: stage, Facts: facts, Targets: targets}
 }

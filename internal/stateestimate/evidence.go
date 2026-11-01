@@ -3,6 +3,7 @@
 package stateestimate
 
 import (
+	"image"
 	"time"
 
 	"gwentcoachmvp/internal/rules"
@@ -54,6 +55,27 @@ type Facts struct {
 	Outcome *OutcomeFacts
 }
 
+// FieldEvidence identifies the captures supporting an agreed field. A zero value
+// means unknown; timestamps belong to the captures, not the time of estimation.
+type FieldEvidence struct {
+	Known         bool
+	Frames        [2]FrameRef
+	CalibrationID string
+}
+
+// Target identifies an observed actionable object, independently of game facts.
+// Kind is control, hand-instance, row, or board-target; ID identifies the object.
+// Bounds are in native frame coordinates and LayoutID identifies the observed layout.
+type Target struct {
+	Kind, ID, LayoutID string
+	Bounds             image.Rectangle
+}
+
+type TargetObservation struct {
+	Target   Target
+	Evidence FieldEvidence
+}
+
 // Evidence is the output of a recognizer for one frame. CalibrationID identifies
 // the immutable detector configuration. Stage is a UI label (or "unknown"),
 // never a lookup key for Facts. Predictions and input receipts are not Evidence.
@@ -62,6 +84,7 @@ type Evidence struct {
 	CalibrationID string
 	Stage         string
 	Facts         Facts
+	Targets       []Target
 }
 
 // Observation retains agreed partial facts. View is nil until all required
@@ -73,6 +96,8 @@ type Observation struct {
 	Sources                        [2]string
 	CalibrationID, Stage, StateKey string
 	Facts                          Facts
+	FieldEvidence                  map[string]FieldEvidence
+	Targets                        []TargetObservation
 	View                           *rules.View
 	Eligible                       bool
 	Missing                        []string

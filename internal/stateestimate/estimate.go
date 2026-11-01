@@ -44,6 +44,8 @@ func Estimate(pair [2]Evidence, now time.Time, maxAge time.Duration) (Observatio
 		Cards:   agreeCards(a.Facts.Cards, b.Facts.Cards),
 		Outcome: agree(a.Facts.Outcome, b.Facts.Outcome),
 	}
+	provenance := FieldEvidence{Known: true, Frames: [2]FrameRef{a.Frame, b.Frame}, CalibrationID: b.CalibrationID}
+	out.FieldEvidence = make(map[string]FieldEvidence)
 	for _, f := range []struct {
 		name  string
 		known bool
@@ -53,8 +55,11 @@ func Estimate(pair [2]Evidence, now time.Time, maxAge time.Duration) (Observatio
 	} {
 		if !f.known {
 			out.Missing = append(out.Missing, f.name)
+		} else {
+			out.FieldEvidence[f.name] = provenance
 		}
 	}
+	out.Targets = agreedTargets(a, b, provenance)
 	if out.Facts.Cards != nil {
 		for _, c := range out.Facts.Cards.Visible {
 			if c.CardID == 0 {
@@ -86,6 +91,37 @@ func Estimate(pair [2]Evidence, now time.Time, maxAge time.Duration) (Observatio
 	digest := sha256.Sum256(encoded)
 	out.StateKey = hex.EncodeToString(digest[:])
 	return out, nil
+}
+
+func agreedTargets(a, b Evidence, source FieldEvidence) []TargetObservation {
+	valid := func(t Target, f FrameRef) bool {
+		return (t.Kind == "control" || t.Kind == "hand-instance" || t.Kind == "row" || t.Kind == "board-target") &&
+			t.ID != "" && t.LayoutID != "" && !t.Bounds.Empty() && t.Bounds.Min.X >= 0 && t.Bounds.Min.Y >= 0 && t.Bounds.Max.X <= f.Width && t.Bounds.Max.Y <= f.Height
+	}
+	var out []TargetObservation
+	for _, target := range b.Targets {
+		if !valid(target, b.Frame) {
+			continue
+		}
+		countA, countB := 0, 0
+		for _, t := range a.Targets {
+			if t.Kind == target.Kind && t.ID == target.ID {
+				countA++
+				if t != target || !valid(t, a.Frame) {
+					countA += 2
+				}
+			}
+		}
+		for _, t := range b.Targets {
+			if t.Kind == target.Kind && t.ID == target.ID {
+				countB++
+			}
+		}
+		if countA == 1 && countB == 1 {
+			out = append(out, TargetObservation{Target: target, Evidence: source})
+		}
+	}
+	return out
 }
 
 func agree[T any](a, b *T) *T {
