@@ -39,7 +39,8 @@ func TestOfflineEvaluation(t *testing.T) {
 		return p
 	}
 	var out bytes.Buffer
-	if err := run([]string{write("a.json", a), write("s.json", s)}, &out); err != nil {
+	annotationPath := write("a.json", a)
+	if err := run([]string{annotationPath, write("s.json", s)}, &out); err != nil {
 		t.Fatal(err)
 	}
 	var got summary
@@ -48,6 +49,26 @@ func TestOfflineEvaluation(t *testing.T) {
 	}
 	if got.Matched != 4 || got.UnmatchedRegions != 1 || got.Correct != 1 || got.Incorrect != 1 || got.UnknownPrediction != 1 || got.UnknownLabel != 1 {
 		t.Fatalf("%+v", got)
+	}
+	out.Reset()
+	regions := regionReport{Report: "report-1", Regions: []cardmatch.ROI{rect(0), rect(40), rect(80)}}
+	if err := run([]string{"--regions", annotationPath, write("regions.json", regions)}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Matched != 2 || got.UnmatchedLabels != 2 || got.UnmatchedRegions != 1 || got.UnknownPrediction != 2 {
+		t.Fatalf("regions: %+v", got)
+	}
+	regions.Report = "other"
+	if err := run([]string{"--regions", annotationPath, write("wrong.json", regions)}, &out); err == nil {
+		t.Fatal("accepted mismatched region report")
+	}
+	regions.Report = "report-1"
+	regions.Regions = nil
+	if err := run([]string{"--regions", annotationPath, write("null.json", regions)}, &out); err == nil {
+		t.Fatal("accepted missing regions")
 	}
 	a.Report = "wrong"
 	if _, err := evaluate(a, s); err == nil {

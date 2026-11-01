@@ -140,22 +140,48 @@ func evaluate(a annotation, s scan) (summary, error) {
 	}
 	return r, nil
 }
+
+// regionReport allows a localization experiment to be assessed without a
+// matcher or a second frame. Regions are always treated as unknown identities.
+type regionReport struct {
+	Report  string          `json:"report"`
+	Regions []cardmatch.ROI `json:"regions"`
+}
+
 func run(args []string, out io.Writer) error {
+	regionsOnly := len(args) == 3 && args[0] == "--regions"
+	if regionsOnly {
+		args = args[1:]
+	}
 	if len(args) != 2 {
-		return fmt.Errorf("usage: hand-eval annotation.json scan.json")
+		return fmt.Errorf("usage: hand-eval [--regions] annotation.json scan-or-regions.json")
 	}
 	var a annotation
 	if err := readJSON(args[0], &a); err != nil {
 		return fmt.Errorf("annotation: %w", err)
 	}
-	// Scan output has timing and per-frame matcher diagnostics which evaluation does not need.
-	data, err := os.ReadFile(args[1])
-	if err != nil {
-		return err
-	}
 	var s scan
-	if err = json.Unmarshal(data, &s); err != nil {
-		return fmt.Errorf("scan: %w", err)
+	if regionsOnly {
+		var regions regionReport
+		if err := readJSON(args[1], &regions); err != nil {
+			return fmt.Errorf("regions: %w", err)
+		}
+		if regions.Report == "" || regions.Regions == nil {
+			return fmt.Errorf("regions require a report and an array of rectangles")
+		}
+		s = scan{Status: "unvalidated_candidates_no_input", Reports: [2]string{regions.Report}, Cards: make([]observe.HandCandidate, 0, len(regions.Regions))}
+		for _, roi := range regions.Regions {
+			s.Cards = append(s.Cards, observe.HandCandidate{Art: roi, Status: "unknown"})
+		}
+	} else {
+		// Scan output has timing and matcher diagnostics evaluation does not need.
+		data, err := os.ReadFile(args[1])
+		if err != nil {
+			return err
+		}
+		if err = json.Unmarshal(data, &s); err != nil {
+			return fmt.Errorf("scan: %w", err)
+		}
 	}
 	f, err := os.Open(a.Image)
 	if err != nil {
