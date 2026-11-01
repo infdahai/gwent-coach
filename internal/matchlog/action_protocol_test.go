@@ -22,6 +22,26 @@ func protocolFixture() []Event {
 	}
 }
 
+func TestTerminalCannotHideUnresolvedInput(t *testing.T) {
+	terminal := Event{MatchID: "m", EventType: "match_completed"}
+	intent := Event{MatchID: "m", EventType: "action_intent", ActionID: "b", ActionDomain: "gameplay", StateVersion: ptr(uint64(3))}
+	standalone := Event{MatchID: "m", EventType: "input_intent", ActionID: "input/1", Step: ptr(uint64(1)), ActionIntent: map[string]string{"kind": "click"}}
+	for name, events := range map[string][]Event{
+		"pending action":     append(append(protocolFixture(), intent), terminal),
+		"pending standalone": append(append(protocolFixture(), standalone), terminal),
+		"after terminal":     append(append(protocolFixture(), terminal), Event{MatchID: "m", EventType: "observation"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ConfirmedTrainingEvents(events); err == nil {
+				t.Fatal("invalid terminal stream accepted")
+			}
+		})
+	}
+	if _, err := ReplayActions(append(protocolFixture(), intent)); err != nil {
+		t.Fatalf("unsealed tail must remain recoverable: %v", err)
+	}
+}
+
 func TestTrainingRequiresEveryOrderedInputReceipt(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

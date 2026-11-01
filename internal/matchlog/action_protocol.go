@@ -53,6 +53,7 @@ func ReplayActions(events []Event) ([]ActionTrace, error) {
 	index := map[string]int{}
 	active := map[string]string{}
 	standalone := map[string]InputStep{}
+	terminal := map[string]bool{}
 	fail := func(e Event, why string) ([]ActionTrace, error) {
 		return nil, fmt.Errorf("%s action %q step %v: %s", e.EventType, e.ActionID, e.Step, why)
 	}
@@ -60,7 +61,22 @@ func ReplayActions(events []Event) ([]ActionTrace, error) {
 		e := event
 		key := e.MatchID + "\x00" + e.ActionID
 		i, known := index[key]
+		if terminal[e.MatchID] {
+			return fail(e, "event follows terminal record")
+		}
 		switch e.EventType {
+		case "match_completed", "match_incomplete":
+			if e.EventType == "match_completed" {
+				if active[e.MatchID] != "" {
+					return fail(e, "completion hides unresolved action")
+				}
+				for _, step := range standalone {
+					if step.Intent.MatchID == e.MatchID && !fullStep(step) {
+						return fail(e, "completion hides unresolved standalone input")
+					}
+				}
+			}
+			terminal[e.MatchID] = true
 		case "action_intent":
 			if e.ActionID == "" || known || active[e.MatchID] != "" || e.StateVersion == nil || *e.StateVersion == 0 {
 				return fail(e, "missing, duplicate or overlapping action intent")
