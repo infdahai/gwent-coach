@@ -16,6 +16,9 @@ type DigitCalibration struct {
 	MaxDistance   int
 	MinGap        int
 	Templates     map[int][]string
+	// CandidateOnly must be explicitly set: sparse glyph samples are not
+	// sufficient evidence for gameplay or for detecting partial occlusion.
+	CandidateOnly bool
 }
 
 func (c DigitCalibration) validate(bounds image.Rectangle) error {

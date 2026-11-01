@@ -14,11 +14,15 @@ import (
 )
 
 func scoreDigits(roi image.Rectangle) DigitCalibration {
-	return DigitCalibration{ROI: roi, Threshold: 140, Width: 5, Height: 7, MaxDigits: 2, MaxDistance: 2, MinGap: 4, Templates: map[int][]string{0: {"01110110111000110001100011101101110"}, 1: {"00111000110001100011000110001100011", "01111001110011100111001110011100000"}}}
+	return DigitCalibration{CandidateOnly: true, ROI: roi, Threshold: 140, Width: 5, Height: 7, MaxDigits: 2, MaxDistance: 2, MinGap: 4, Templates: map[int][]string{0: {"01110110111000110001100011101101110"}, 1: {"00111000110001100011000110001100011", "01111001110011100111001110011100000"}}}
 }
 func loadRealFrame(t testing.TB, name string) image.Image {
 	t.Helper()
-	f, err := os.Open(filepath.Join("/tmp/gwent-failure046-20261101", name))
+	root := os.Getenv("GWENT_REAL_FRAME_DIR")
+	if root == "" {
+		root = "/tmp/gwent-failure046-20261101"
+	}
+	f, err := os.Open(filepath.Join(root, name))
 	if os.IsNotExist(err) {
 		t.Skip("private real-frame corpus unavailable")
 	}
@@ -51,33 +55,11 @@ func TestRealScoreDigits(t *testing.T) {
 		})
 	}
 }
-func TestDigitReaderEvidenceChain(t *testing.T) {
-	cal, frames := evidenceFixture()
+func TestDigitCandidatesCannotEnterGameplayEvidence(t *testing.T) {
+	cal, _ := evidenceFixture()
 	cal.Digits = map[string]DigitCalibration{"score": scoreDigits(image.Rect(0, 8, 20, 38))}
-	// Draw a scaled zero using the calibrated binary mask.
-	mask := cal.Digits["score"].Templates[0][0]
-	for y := 0; y < 7; y++ {
-		for x := 0; x < 5; x++ {
-			if mask[y*5+x] == '1' {
-				for dy := 0; dy < 3; dy++ {
-					for dx := 0; dx < 3; dx++ {
-						frames[0].Set(x*3+dx+2, y*3+dy+10, color.White)
-					}
-				}
-			}
-		}
-	}
-	reader, err := NewCalibratedEvidenceReader(cal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pair, now := readEvidencePair(t, reader, frames[0])
-	estimated, err := stateestimate.Estimate(pair, now, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v, ok := estimated.Scalars["score"]; !ok || v != 0 {
-		t.Fatalf("score=%d known=%t", v, ok)
+	if _, err := NewCalibratedEvidenceReader(cal); err == nil {
+		t.Fatal("candidate digits accepted as gameplay evidence")
 	}
 }
 

@@ -33,6 +33,7 @@ func main() {
 	ocrImage := flag.String("ocr-image", "", "read Chinese text from a local image with Windows OCR")
 	guardProbe := flag.String("guard-probe", "", "capture guarded cursor transition without mouse button input")
 	hoverAnnotate := flag.String("annotate-hand", "", "bounded Windows hover/OCR pass with calibrated slot regions")
+	collect := flag.String("collect-readonly", "", "bounded Windows capture and numeric recognition config; never sends input")
 	nativeSession := flag.String("native-session", "", "run a pinned Windows multi-match session and export confirmed training samples")
 	nativeLoop := flag.String("native-loop", "", "run calibrated Windows recognition, rules and input loop")
 	nativeSlice := flag.String("native-opening", "", "run one calibrated Windows training opening with a 10s budget")
@@ -88,6 +89,10 @@ func main() {
 		}
 		return
 	}
+	if *collect != "" && (*nativeSession != "" || *nativeLoop != "" || *guardProbe != "" || *hoverAnnotate != "" || *nativeSlice != "" || *handScan != "" || *training || *navigate || *action != "") {
+		fmt.Fprintln(os.Stderr, "read-only collection cannot be combined with input modes")
+		os.Exit(1)
+	}
 	if *nativeSession != "" && (*nativeLoop != "" || *guardProbe != "" || *hoverAnnotate != "" || *nativeSlice != "" || *handScan != "" || *training || *navigate || *action != "" || *count != 1 || *width != 0 || *quality != 0) {
 		fmt.Fprintln(os.Stderr, "native session cannot be combined with other input or sampling modes")
 		os.Exit(1)
@@ -136,7 +141,9 @@ func main() {
 	logger := log.New(f, "", log.LstdFlags|log.LUTC)
 	logger.Printf("starting pid=%d action=%q", os.Getpid(), *action)
 	var runErr error
-	if *nativeSession != "" {
+	if *collect != "" {
+		runErr = observe.RunReadOnlyCollection(*out, logger, *collect, *stopFile, *count, *interval)
+	} else if *nativeSession != "" {
 		runErr = observe.RunNativeSession(*out, logger, *nativeSession, os.Stdout)
 	} else if *guardProbe != "" {
 		runErr = observe.RunGuardProbe(*out, logger, *guardProbe)

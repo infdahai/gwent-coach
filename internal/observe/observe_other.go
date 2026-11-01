@@ -15,6 +15,10 @@ func navigatePlatform(_ string, _ *log.Logger, _ Navigation, _ *PhaseModel) erro
 	return fmt.Errorf("navigation requires Windows interactive desktop")
 }
 
+func RunReadOnlyCollection(_ string, _ *log.Logger, _, _ string, _ int, _ time.Duration) error {
+	return fmt.Errorf("live collection requires Windows interactive desktop")
+}
+
 func RunGuardProbe(_ string, _ *log.Logger, _ string) error {
 	return fmt.Errorf("guard probe requires Windows interactive desktop")
 }

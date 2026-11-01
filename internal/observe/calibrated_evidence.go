@@ -80,13 +80,8 @@ func NewCalibratedEvidenceReader(cal EvidenceCalibration) (*CalibratedEvidenceRe
 			return nil, err
 		}
 	}
-	for name, digits := range cal.Digits {
-		if name == "" || cal.Scalars[name] != nil {
-			return nil, fmt.Errorf("invalid or duplicate digit calibration")
-		}
-		if err := digits.validate(image.Rect(0, 0, w, h)); err != nil {
-			return nil, fmt.Errorf("digits %q: %w", name, err)
-		}
+	if len(cal.Digits) != 0 {
+		return nil, fmt.Errorf("digit recognition is candidate-only and cannot supply gameplay evidence")
 	}
 	data, err := json.Marshal(cal)
 	if err != nil {
@@ -199,11 +194,6 @@ func (r *CalibratedEvidenceReader) readFacts(frame stateestimate.FrameRef, img i
 	for name, cal := range r.cal.Scalars {
 		if value := readFact(cal, img); value != nil {
 			scalars[name] = *value
-		}
-	}
-	for name, cal := range r.cal.Digits {
-		if value, ok := cal.ReadDigits(img); ok {
-			scalars[name] = value
 		}
 	}
 	return stateestimate.Evidence{Frame: frame, CalibrationID: r.id, Stage: stage, Facts: facts, Targets: targets, Scalars: scalars}
