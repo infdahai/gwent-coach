@@ -39,6 +39,8 @@ func main() {
 	nativeLoop := flag.String("native-loop", "", "run calibrated Windows recognition, rules and input loop")
 	nativeSlice := flag.String("native-opening", "", "run one calibrated Windows training opening with a 10s budget")
 	navigate := flag.Bool("navigate-training", false, "bounded guarded navigation; never starts a match")
+	navigationPlan := flag.String("navigation-plan", "", "calibrated navigation plan JSON")
+	navigationPlanSHA := flag.String("navigation-plan-sha256", "", "expected SHA-256 of navigation plan")
 	training := flag.Bool("training-pass-only", false, "experimental local training game using a pass-only policy")
 	trainingState := flag.String("training-state", "", "new directory for the training attempt ledger")
 	trainingTimeout := flag.Duration("training-timeout", 10*time.Minute, "training attempt timeout")
@@ -176,7 +178,7 @@ func main() {
 	} else if *training {
 		runErr = observe.RunTraining(*out, logger, observe.Training{ModelPath: *model, ModelSHA256: *modelSHA, StopFile: *stopFile, StateDir: *trainingState, Timeout: *trainingTimeout, ResumePhase: *resumePhase})
 	} else if *navigate {
-		runErr = observe.Navigate(*out, logger, observe.Navigation{ModelPath: *model, ModelSHA256: *modelSHA, StopFile: *stopFile, StateDir: *state, Steps: *steps})
+		runErr = observe.Navigate(*out, logger, observe.Navigation{ModelPath: *model, ModelSHA256: *modelSHA, PlanPath: *navigationPlan, PlanSHA256: *navigationPlanSHA, StopFile: *stopFile, StateDir: *state, Steps: *steps})
 	} else if *action == "" {
 		runErr = observe.Sample(*out, logger, observe.Sampling{Count: *count, Interval: *interval, MaxWidth: *width, JPEGQuality: *quality, StopFile: *stopFile})
 	} else {

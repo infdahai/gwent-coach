@@ -1,11 +1,15 @@
 package observe
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -13,21 +17,59 @@ import (
 type Transition struct {
 	From, To string
 	X, Y     int
+	// Target is an operator-labelled visible target crop in native coordinates.
+	Target image.Rectangle
 }
 
-var trainingRoute = map[string]Transition{
-	"result":  {"result", "rewards", 480, 514},
-	"rewards": {"rewards", "modes", 446, 514},
-	"main":    {"main", "modes", 435, 320},
-	// Carousel coordinates vary by selection; no generic phase may authorize it.
-	// A future validated route must identify the exact selected carousel state.
+// NavigationPlan binds every click to RGB evidence for its target in every
+// variant of the source page. Labels and target semantics require calibration.
+type NavigationPlan struct {
+	Transitions []Transition
+}
 
-	"training-menu": {"training-menu", "training", 506, 288},
+func (p NavigationPlan) validate(m *PhaseModel) error {
+	if m.Width != 1920 || m.Height != 1080 || len(p.Transitions) == 0 || len(p.Transitions) > 8 {
+		return fmt.Errorf("navigation requires native geometry and 1..8 transitions")
+	}
+	names := map[string]bool{}
+	for _, phase := range m.Phases {
+		names[phase.Name] = true
+	}
+	seen := map[string]bool{}
+	for _, t := range p.Transitions {
+		if !names[t.From] || !names[t.To] || t.From == t.To || t.From == "training" || seen[t.From] || t.Target.Empty() || !t.Target.In(image.Rect(0, 0, m.Width, m.Height)) || !image.Pt(t.X, t.Y).In(t.Target) || !m.RequiresRGBAnchor(t.From, t.Target, .15) {
+			return fmt.Errorf("transition %q requires a unique calibrated page and target", t.From)
+		}
+		seen[t.From] = true
+	}
+	for _, start := range p.Transitions {
+		current := start.From
+		visited := map[string]bool{}
+		for current != "training" {
+			if visited[current] {
+				return fmt.Errorf("navigation route contains a cycle")
+			}
+			visited[current] = true
+			next := ""
+			for _, t := range p.Transitions {
+				if t.From == current {
+					next = t.To
+					break
+				}
+			}
+			if next == "" {
+				return fmt.Errorf("navigation route does not reach training")
+			}
+			current = next
+		}
+	}
+	return nil
 }
 
 type Navigation struct {
-	ModelPath, ModelSHA256, StopFile, StateDir, InterlockDir string
-	Steps                                                    int
+	ModelPath, ModelSHA256, PlanPath, PlanSHA256, StopFile, StateDir, InterlockDir string
+	Steps                                                                          int
+	plan                                                                           NavigationPlan
 }
 type navFrame struct {
 	Phase, Reference string
@@ -102,17 +144,20 @@ func runNavigation(n Navigation, observe func() (navFrame, error), send func(nav
 		if e != nil {
 			return e
 		}
-		if a.Phase == "unknown" || a.Phase != b.Phase {
+		if a.Reference == "" || a.Reference == b.Reference || !b.Captured.After(a.Captured) || time.Since(a.Captured) > 2*time.Second || a.Phase == "unknown" || a.Phase != b.Phase {
 			return fmt.Errorf("unknown or unstable navigation phase")
 		}
 		if b.Phase == "training" {
 			return record("training_entry_verified_no_match_started", b, nil, nil)
 		}
-		// Only the historical Bearly-selected carousel has a validated training tile location.
-		// Refuse other carousel selections, including standard/online matchmaking.
-
-		t, ok := trainingRoute[b.Phase]
-		if !ok {
+		var t Transition
+		for _, candidate := range n.plan.Transitions {
+			if candidate.From == b.Phase {
+				t = candidate
+				break
+			}
+		}
+		if t.From == "" {
 			return fmt.Errorf("phase %q has no authorized training transition", b.Phase)
 		}
 		if e = pause(); e != nil {
@@ -128,8 +173,10 @@ func runNavigation(n Navigation, observe func() (navFrame, error), send func(nav
 		if e = record("delivered_unconfirmed", b, &t, nil); e != nil {
 			return e
 		}
+		delivered := time.Now()
 		consecutive := 0
 		previous := ""
+		var previousFrame navFrame
 		verified := false
 		for attempt := 0; attempt < 12; attempt++ {
 			v, e := get()
@@ -142,11 +189,12 @@ func runNavigation(n Navigation, observe func() (navFrame, error), send func(nav
 				_ = record("unresolved_do_not_replay", v, &t, e)
 				return e
 			}
-			if v.Phase == t.To || (t.From == "modes" && v.Phase == "training") {
-				if previous != v.Phase {
+			if v.Phase == t.To && v.Reference != "" && v.Captured.After(delivered) {
+				if previous != v.Phase || v.Reference == previousFrame.Reference || !v.Captured.After(previousFrame.Captured) || time.Since(previousFrame.Captured) > 2*time.Second {
 					consecutive = 0
 				}
 				previous = v.Phase
+				previousFrame = v
 				consecutive++
 			} else {
 				previous = ""
@@ -175,6 +223,20 @@ func runNavigation(n Navigation, observe func() (navFrame, error), send func(nav
 func Navigate(out string, logger *log.Logger, n Navigation) error {
 	model, e := loadBoundPhases(n.ModelPath, n.ModelSHA256)
 	if e != nil {
+		return e
+	}
+	data, e := os.ReadFile(n.PlanPath)
+	if e != nil {
+		return e
+	}
+	sum := sha256.Sum256(data)
+	if len(n.PlanSHA256) != 64 || !strings.EqualFold(n.PlanSHA256, hex.EncodeToString(sum[:])) {
+		return fmt.Errorf("navigation plan hash mismatch")
+	}
+	if e = json.Unmarshal(data, &n.plan); e != nil {
+		return e
+	}
+	if e = n.plan.validate(model); e != nil {
 		return e
 	}
 	return navigatePlatform(out, logger, n, model)
