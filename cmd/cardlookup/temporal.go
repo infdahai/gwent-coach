@@ -22,6 +22,7 @@ type temporalFrame struct {
 	Batch      string               `json:"batch"`
 	CapturedAt time.Time            `json:"captured_at"`
 	Regions    []temporalAnnotation `json:"regions"`
+	Complete   bool                 `json:"complete"`
 }
 type temporalManifest struct {
 	MaxGapMS    int             `json:"max_gap_ms"`
@@ -69,6 +70,9 @@ func evaluateTemporal(path string, out io.Writer) error {
 		Unscored  int            `json:"unscored_links"`
 		Unmatched int            `json:"unmatched_current_regions"`
 		Skipped   int            `json:"skipped_pairs"`
+		Occluded  int            `json:"labelled_became_occluded"`
+		Missing   int            `json:"labelled_absent_from_complete_frame"`
+		Missed    int            `json:"labelled_visible_not_correctly_linked"`
 		Pairs     []temporalPair `json:"pairs"`
 	}
 	r := report{Trust: "offline_unvalidated_no_input; instance labels and visibility are human supplied", Pairs: []temporalPair{}}
@@ -113,6 +117,33 @@ func evaluateTemporal(path string, out io.Writer) error {
 				pair.Status = "compared"
 				pair.Links = links
 				r.Unmatched += len(regions) - len(links)
+				current := make(map[string]temporalAnnotation)
+				for _, a := range frame.Regions {
+					if a.Instance != "" {
+						current[a.Instance] = a
+					}
+				}
+				correctLinks := make(map[string]bool)
+				for _, link := range links {
+					a, b := previous.frame.Regions[link.Previous].Instance, frame.Regions[link.Current].Instance
+					if a != "" && a == b {
+						correctLinks[a] = true
+					}
+				}
+				for _, a := range previous.frame.Regions {
+					if a.Instance == "" || !a.Visible {
+						continue
+					}
+					b, exists := current[a.Instance]
+					switch {
+					case exists && !b.Visible:
+						r.Occluded++
+					case !exists && frame.Complete:
+						r.Missing++
+					case exists && b.Visible && !correctLinks[a.Instance]:
+						r.Missed++
+					}
+				}
 				for _, link := range links {
 					a, b := previous.frame.Regions[link.Previous].Instance, frame.Regions[link.Current].Instance
 					if a == "" || b == "" {
