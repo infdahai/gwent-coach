@@ -42,6 +42,16 @@ With the game foreground in the interactive session, run the executable from tha
 
 The collector accepts 1–1,200 frames per invocation and intervals of at least 100 ms. For example, `-samples 1200 -interval 1s` targets roughly 20 minutes; capture and processing time can extend the duration. It stops on capture or recognition errors. `runs\coach.log` records errors; each invocation creates `runs\readonly-collection-*\recognition.jsonl` and per-frame directories containing a timestamped capture report and JPEG. The `reference` field points to the report, which identifies the screenshot. Runs accumulate across invocations; remove old local runs when no longer needed. Screenshots and reports can contain private information.
 
+For a read-only remote pull on the Mac, use an existing SSH host configuration and a separate private local inbox:
+
+```sh
+mkdir -p "$HOME/gwent-collection-inbox"
+chmod 700 "$HOME/gwent-collection-inbox"
+go run ./cmd/collection-analysis pull -host WINDOWS_SSH_HOST -source 'D:\path\to\runs' -dest "$HOME/gwent-collection-inbox" -watch 30s
+```
+
+Omit `-watch` for one pull. Each poll reads Windows collection JSONL files using PowerShell, validates and incrementally imports them, and prints unverified per-run summaries. Errors are reported and watch mode retries on the next poll; one-shot mode exits with an error. Each pull has a two-minute timeout (adjust with `-timeout`), a 16 MiB limit per run and a 64 MiB total response limit. It rereads all discovered JSONL files each poll, so large archives can exceed these limits. It reads only JSONL, not screenshots or capture reports; copy those separately for manual labeling. SSH and filesystem permissions must already be configured. No match results or gameplay actions are generated.
+
 On the Mac, a locally mounted or copied collection root can be scanned repeatedly with `go run ./cmd/collection-analysis import /path/to/collection-root /private/collection-inbox`. Create the private inbox first and keep it separate from both the source and the sealed-match training inbox. Each scan discovers immediate `readonly-collection-*` directories, validates complete JSONL lines, and atomically updates one private JSONL snapshot per run. An incomplete final line is deferred until the next scan; source truncation or changes to already imported bytes cause an error. Schedule repeated scans externally. The importer copies only JSONL records, reads the entire JSONL each time, and does not transfer screenshots or reports, connect to Windows, or verify source identity. macOS and Linux use an operating-system lock that is automatically released if the importer exits; keep the persistent `.collection-import.lock` file in place. An old `.collection-import-lock` directory from earlier versions is ignored.
 
 Alternatively, copy a run's `recognition.jsonl` locally and summarize it with `go run ./cmd/collection-analysis /path/to/recognition.jsonl`. The JSON output counts frames, candidate values, unknown frames, and reported consecutive candidate agreements for each scalar. It retains the `unverified_candidate_not_for_actions` trust marker; agreement and counts do not validate recognition. The command reads only the JSONL, not the referenced screenshots, and does not train a model or report match results.

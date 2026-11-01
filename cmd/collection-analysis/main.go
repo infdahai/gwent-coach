@@ -139,6 +139,9 @@ func analyzeLabeled(input io.Reader, labels []annotation) (summary, error) {
 }
 
 func run(args []string, stdout io.Writer) error {
+	if len(args) > 0 && args[0] == "pull" {
+		return runPull(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "import" {
 		if len(args) != 3 {
 			return fmt.Errorf("usage: collection-analysis import SOURCE_DIR DEST_DIR")
