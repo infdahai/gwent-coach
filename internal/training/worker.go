@@ -301,9 +301,25 @@ func compute(c Config) error {
 	eval := Metrics{Timing: map[string][]float64{}}
 	legacy := Metrics{Timing: map[string][]float64{}}
 	var fingerprints []string
+	type quarantineEntry struct {
+		MatchID        string  `json:"match_id"`
+		EventDigest    string  `json:"event_digest"`
+		ClaimedSession string  `json:"claimed_session_id,omitempty"`
+		ClaimedResult  *string `json:"claimed_result,omitempty"`
+	}
+	inventory := make([]quarantineEntry, 0, len(items))
 	actionCounts := map[string]int{}
 	for _, m := range items {
-		fingerprints = append(fingerprints, m.id+":"+digest(m.data))
+		eventDigest := digest(m.data)
+		fingerprints = append(fingerprints, m.id+":"+eventDigest)
+		entry := quarantineEntry{MatchID: m.id, EventDigest: eventDigest, ClaimedResult: m.events[len(m.events)-1].Result}
+		for _, event := range m.events {
+			if event.SessionID != "" {
+				entry.ClaimedSession = event.SessionID
+				break
+			}
+		}
+		inventory = append(inventory, entry)
 		// Session IDs do not establish policy, rules or catalog provenance.
 		target := &legacy
 		target.Matches++
@@ -358,13 +374,14 @@ func compute(c Config) error {
 		DataFingerprint      string `json:"data_fingerprint"`
 		Split                string `json:"split"`
 		Training, Evaluation Metrics
-		Quarantined          Metrics        `json:"quarantined_unverified_provenance"`
-		CandidateStatus      string         `json:"candidate_status"`
-		Agreement            any            `json:"heldout_baseline_candidate_agreement"`
-		AgreementReason      string         `json:"agreement_reason"`
-		ActionCounts         map[string]int `json:"training_action_counts"`
-		Limitation           string         `json:"limitation"`
-	}{"offline-statistics-v1", digest([]byte(strings.Join(fingerprints, "\n"))), "no eligible sessions: policy, rules and catalog provenance unverified", train, eval, legacy, "insufficient_data", nil, "recorded logs do not contain ordered legal candidate sets", actionCounts, "outcomes unverified; no candidate or promotion"}, "", "  ")
+		Quarantined          Metrics           `json:"quarantined_unverified_provenance"`
+		QuarantineInventory  []quarantineEntry `json:"quarantine_inventory_unverified_claims"`
+		CandidateStatus      string            `json:"candidate_status"`
+		Agreement            any               `json:"heldout_baseline_candidate_agreement"`
+		AgreementReason      string            `json:"agreement_reason"`
+		ActionCounts         map[string]int    `json:"training_action_counts"`
+		Limitation           string            `json:"limitation"`
+	}{"offline-statistics-v1", digest([]byte(strings.Join(fingerprints, "\n"))), "no eligible sessions: policy, rules and catalog provenance unverified", train, eval, legacy, inventory, "insufficient_data", nil, "recorded logs do not contain ordered legal candidate sets", actionCounts, "outcomes unverified; no candidate or promotion"}, "", "  ")
 	if err != nil {
 		return err
 	}
