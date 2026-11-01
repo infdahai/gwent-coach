@@ -108,7 +108,7 @@ func TestInspectNavigationRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Status != "delivered, recorded evidence requires review" || report.Claim != "present" || report.Observations != 2 || !reflect.DeepEqual(report.CandidateSequences, []uint64{5}) {
+	if report.Status != "delivered, recorded evidence requires review" || report.Claim != "present" || report.Observations != 2 || !reflect.DeepEqual(report.CandidateSequences, []uint64{6}) {
 		t.Fatalf("unexpected report: %+v", report)
 	}
 	after, _ := os.ReadFile(path)

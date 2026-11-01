@@ -68,7 +68,7 @@ func (j *ActionJournal) Begin(id string, snapshot Snapshot, action any) error {
 	if err != nil {
 		return err
 	}
-	if err := j.writer.AppendDurable(matchlog.Event{EventType: "action_intent", ActionID: id, ActionDomain: domain, StateVersion: &snapshot.Version, Phase: &snapshot.Phase, FramePath: &snapshot.Source, VisibleState: json.RawMessage(snapshot.State), ActionIntent: action}); err != nil {
+	if err := j.writer.AppendDurable(matchlog.Event{EventType: "action_intent", ActionID: id, ActionDomain: domain, InputProtocol: matchlog.InputProtocolCompleted, StateVersion: &snapshot.Version, Phase: &snapshot.Phase, FramePath: &snapshot.Source, VisibleState: json.RawMessage(snapshot.State), ActionIntent: action}); err != nil {
 		return err
 	}
 	j.pending, j.version, j.step, j.delivered, j.complete = id, snapshot.Version, 0, time.Time{}, true
@@ -140,6 +140,12 @@ func (j *ActionJournal) ExecuteStep(action Action, execute func(Action) error) e
 	if !called {
 		j.complete = false
 		err = errors.Join(err, fmt.Errorf("input adapter returned without receipt; do not replay"))
+	}
+	if err == nil && j.complete && id == j.pending {
+		err = j.writer.AppendDurable(matchlog.Event{EventType: "input_completed", ActionID: id, Step: &step, StateVersion: version})
+		if err == nil {
+			j.steps[len(j.steps)-1].Completed = true
+		}
 	}
 	if err != nil {
 		j.complete = false

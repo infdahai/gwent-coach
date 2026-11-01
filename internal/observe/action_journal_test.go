@@ -80,7 +80,7 @@ func TestJournalPersistsIntentDeliveryAndConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"action_intent", "input_intent", "input_receipt", "action_delivered", "action_confirmed", "result_observed"}
+	want := []string{"action_intent", "input_intent", "input_receipt", "input_completed", "action_delivered", "action_confirmed", "result_observed"}
 	lines := splitJSONLines(data)
 	if len(lines) != len(want) {
 		t.Fatalf("events=%s", data)
@@ -114,7 +114,7 @@ func splitJSONLines(data []byte) [][]byte {
 }
 
 func TestJournalStopsOnPersistenceFailureOrPartialDelivery(t *testing.T) {
-	for _, failure := range []string{"input_intent", "input_receipt", "partial"} {
+	for _, failure := range []string{"input_intent", "input_receipt", "input_completed", "partial"} {
 		t.Run(failure, func(t *testing.T) {
 			sink := &receiptSink{fail: failure}
 			j := NewActionJournal(sink)
@@ -129,7 +129,11 @@ func TestJournalStopsOnPersistenceFailureOrPartialDelivery(t *testing.T) {
 				if failure == "partial" {
 					outcome = "partial"
 				}
-				return a.onReceipt(InputReceipt{Outcome: outcome, EventsSent: 1, DeliveredAt: at})
+				sentCount := uint32(2)
+				if failure == "partial" {
+					sentCount = 1
+				}
+				return a.onReceipt(InputReceipt{Outcome: outcome, EventsSent: sentCount, DeliveredAt: at})
 			})
 			if failure == "input_intent" && sent {
 				t.Fatal("sent after failed intent")
