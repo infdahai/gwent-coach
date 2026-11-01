@@ -123,6 +123,44 @@ func TestCLI(t *testing.T) {
 	if _, err := invoke(append(args, "-roi", "0,0,999,999")...); err == nil {
 		t.Fatal("invalid ROI accepted")
 	}
+	// Evaluate known, deliberately wrong, and unknown/occluded annotations.
+	m.Samples = append(m.Samples, sample{CardID: 113310, Image: "forward.png", ROI: cardmatch.ROI{Width: 90, Height: 80}}, sample{CardID: 0, Image: "forward.png", ROI: cardmatch.ROI{Width: 90, Height: 80}})
+	b, err = json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(manifestPath, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err = invoke("-mode", "evaluate", "-manifest", manifestPath, "-templates", templatePath, "-max-distance", "0", "-min-gap", "1")
+	if err != nil || string(result["correct"]) != "2" || string(result["false_match"]) != "2" {
+		t.Fatal(result, err)
+	}
+	blank, err := os.Create(filepath.Join(dir, "occluded.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = png.Encode(blank, image.NewGray(image.Rect(0, 0, 90, 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err = blank.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m.Samples = []sample{{CardID: 0, Image: "occluded.png", ROI: cardmatch.ROI{Width: 90, Height: 80}}, {CardID: 113301, Image: "reverse.png", ROI: cardmatch.ROI{Width: 90, Height: 80}}}
+	b, err = json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(manifestPath, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err = invoke("-mode", "evaluate", "-manifest", manifestPath, "-templates", templatePath, "-max-distance", "0", "-min-gap", "1")
+	if err != nil || string(result["rejected_unknown"]) != "1" || string(result["false_match"]) != "1" {
+		t.Fatal(result, err)
+	}
+	if _, err = invoke("-mode", "evaluate", "-manifest", manifestPath, "-templates", templatePath); err == nil {
+		t.Fatal("accepted missing thresholds")
+	}
 	if _, err := invoke("-mode", "card", "-data-version", "other"); err == nil || !strings.Contains(err.Error(), "version") {
 		t.Fatal(err)
 	}

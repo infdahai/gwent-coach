@@ -39,7 +39,7 @@ func main() {
 
 func run(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("cardlookup", flag.ContinueOnError)
-	mode := fs.String("mode", "", "import, templates, card, or image")
+	mode := fs.String("mode", "", "import, templates, card, image, or evaluate")
 	dbPath := fs.String("db", "runs/cards.db", "local bbolt database")
 	data := fs.String("data-version", cardindex.DataVersion, "required data version")
 	rules := fs.String("rules-version", cardindex.RulesVersion, "required rules version")
@@ -75,8 +75,8 @@ func run(args []string, out io.Writer) error {
 		}
 		return encode(map[string]any{"version": version, "cards": db.Len(), "import_and_validation_ns": time.Since(start).Nanoseconds()})
 	}
-	if *mode != "templates" && *mode != "card" && *mode != "image" {
-		return fmt.Errorf("-mode must be import, templates, card, or image")
+	if *mode != "templates" && *mode != "card" && *mode != "image" && *mode != "evaluate" {
+		return fmt.Errorf("-mode must be import, templates, card, image, or evaluate")
 	}
 	db, err := cardindex.Open(*dbPath, version)
 	if err != nil {
@@ -138,6 +138,8 @@ func run(args []string, out io.Writer) error {
 			return closeErr
 		}
 		return encode(map[string]any{"templates": len(file.Templates), "calibration": "unvalidated", "build_ns": time.Since(start).Nanoseconds()})
+	case "evaluate":
+		return evaluateSamples(*manifestPath, *templates, db, cardmatch.Thresholds{MaxDistance: *maxDistance, MinGap: *minGap}, out)
 	case "image":
 		thresholds := cardmatch.Thresholds{MaxDistance: *maxDistance, MinGap: *minGap}
 		if err := thresholds.Validate(); err != nil {
