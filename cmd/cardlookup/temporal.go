@@ -13,9 +13,11 @@ import (
 )
 
 type temporalAnnotation struct {
-	ROI      cardmatch.ROI `json:"roi"`
-	Visible  bool          `json:"visible"`
-	Instance string        `json:"instance"`
+	ROI           cardmatch.ROI  `json:"roi"`
+	Visible       bool           `json:"visible"`
+	Instance      string         `json:"instance"`
+	VisibleRegion *cardmatch.ROI `json:"visible_region,omitempty"`
+	Occlusion     string         `json:"occlusion,omitempty"` // clear, partial, full, unknown
 }
 type temporalFrame struct {
 	Image      string               `json:"image"`
@@ -64,16 +66,19 @@ func evaluateTemporal(path string, out io.Writer) error {
 		return fmt.Errorf("invalid frames or thresholds")
 	}
 	type report struct {
-		Trust     string         `json:"trust"`
-		Correct   int            `json:"correct"`
-		Incorrect int            `json:"incorrect"`
-		Unscored  int            `json:"unscored_links"`
-		Unmatched int            `json:"unmatched_current_regions"`
-		Skipped   int            `json:"skipped_pairs"`
-		Occluded  int            `json:"labelled_became_occluded"`
-		Missing   int            `json:"labelled_absent_from_complete_frame"`
-		Missed    int            `json:"labelled_visible_not_correctly_linked"`
-		Pairs     []temporalPair `json:"pairs"`
+		Trust            string         `json:"trust"`
+		Correct          int            `json:"correct"`
+		Incorrect        int            `json:"incorrect"`
+		Unscored         int            `json:"unscored_links"`
+		Unmatched        int            `json:"unmatched_current_regions"`
+		Skipped          int            `json:"skipped_pairs"`
+		Occluded         int            `json:"labelled_became_occluded"`
+		Missing          int            `json:"labelled_absent_from_complete_frame"`
+		Missed           int            `json:"labelled_visible_not_correctly_linked"`
+		Moved            int            `json:"labelled_visible_region_moved"`
+		Partial          int            `json:"labelled_partial_occlusion"`
+		UnknownOcclusion int            `json:"labelled_unknown_occlusion"`
+		Pairs            []temporalPair `json:"pairs"`
 	}
 	r := report{Trust: "offline_unvalidated_no_input; instance labels and visibility are human supplied", Pairs: []temporalPair{}}
 	var previous imageFrame
@@ -90,6 +95,14 @@ func evaluateTemporal(path string, out io.Writer) error {
 				}
 				seen[a.Instance] = true
 			}
+			switch a.Occlusion {
+			case "", "clear", "partial", "full", "unknown":
+			default:
+				return fmt.Errorf("frame %d: invalid occlusion", i)
+			}
+			if a.VisibleRegion != nil && (a.VisibleRegion.Width <= 0 || a.VisibleRegion.Height <= 0) {
+				return fmt.Errorf("frame %d: invalid visible region", i)
+			}
 			regions = append(regions, cardmatch.TemporalRegion{ROI: a.ROI, Visible: a.Visible})
 		}
 		p := frame.Image
@@ -99,6 +112,14 @@ func evaluateTemporal(path string, out io.Writer) error {
 		im, err := readImage(p)
 		if err != nil {
 			return fmt.Errorf("frame %d: %w", i, err)
+		}
+		for _, a := range frame.Regions {
+			if a.VisibleRegion != nil {
+				v := a.VisibleRegion
+				if v.X < im.Bounds().Min.X || v.Y < im.Bounds().Min.Y || v.X > im.Bounds().Max.X || v.Y > im.Bounds().Max.Y || v.Width > im.Bounds().Max.X-v.X || v.Height > im.Bounds().Max.Y-v.Y {
+					return fmt.Errorf("frame %d: visible region outside image", i)
+				}
+			}
 		}
 		if i > 0 {
 			if !frame.CapturedAt.After(previous.frame.CapturedAt) {
@@ -131,10 +152,24 @@ func evaluateTemporal(path string, out io.Writer) error {
 					}
 				}
 				for _, a := range previous.frame.Regions {
-					if a.Instance == "" || !a.Visible {
+					if a.Instance == "" {
 						continue
 					}
 					b, exists := current[a.Instance]
+					if exists {
+						if b.Occlusion == "partial" {
+							r.Partial++
+						}
+						if b.Occlusion == "unknown" {
+							r.UnknownOcclusion++
+						}
+						if a.VisibleRegion != nil && b.VisibleRegion != nil && (a.VisibleRegion.X != b.VisibleRegion.X || a.VisibleRegion.Y != b.VisibleRegion.Y) {
+							r.Moved++
+						}
+					}
+					if !a.Visible {
+						continue
+					}
 					switch {
 					case exists && !b.Visible:
 						r.Occluded++

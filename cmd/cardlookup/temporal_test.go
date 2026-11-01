@@ -53,6 +53,9 @@ func TestTemporalEvaluation(t *testing.T) {
 	}
 	m.Frames[1].Regions = []temporalAnnotation{regions[0], regions[1]}
 	m.Frames[1].Regions[1].Visible = false
+	m.Frames[0].Regions[0].VisibleRegion = &cardmatch.ROI{X: 0, Y: 0, Width: 5, Height: 5}
+	m.Frames[1].Regions[0].VisibleRegion = &cardmatch.ROI{X: 1, Y: 0, Width: 5, Height: 5}
+	m.Frames[1].Regions[0].Occlusion = "partial"
 	m.Frames[0].Regions[2].Visible = true
 	m.Frames[1].Complete = true
 	write()
@@ -63,7 +66,7 @@ func TestTemporalEvaluation(t *testing.T) {
 	if e = json.Unmarshal(out.Bytes(), &counts); e != nil {
 		t.Fatal(e)
 	}
-	if string(counts["labelled_became_occluded"]) != "1" || string(counts["labelled_absent_from_complete_frame"]) != "1" || string(counts["labelled_visible_not_correctly_linked"]) != "1" {
+	if string(counts["labelled_became_occluded"]) != "1" || string(counts["labelled_absent_from_complete_frame"]) != "1" || string(counts["labelled_visible_not_correctly_linked"]) != "1" || string(counts["labelled_visible_region_moved"]) != "1" || string(counts["labelled_partial_occlusion"]) != "1" {
 		t.Fatal(out.String())
 	}
 	m.Frames[1].Complete = false
