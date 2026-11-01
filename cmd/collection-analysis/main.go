@@ -19,14 +19,49 @@ type scalarSummary struct {
 	Agreed     int         `json:"consecutive_candidate_agreements"`
 }
 
+type evaluation struct {
+	Correct   int `json:"correct"`
+	Incorrect int `json:"incorrect"`
+	Unknown   int `json:"unknown"`
+}
+
+type annotation struct {
+	Reference string         `json:"reference"`
+	Scalars   map[string]int `json:"scalars"`
+}
+
 type summary struct {
-	Trust   string                    `json:"trust"`
-	Frames  int                       `json:"frames"`
-	Scalars map[string]*scalarSummary `json:"scalars"`
+	Trust      string                    `json:"trust"`
+	Frames     int                       `json:"frames"`
+	Scalars    map[string]*scalarSummary `json:"scalars"`
+	Evaluation map[string]*evaluation    `json:"evaluation,omitempty"`
 }
 
 func analyze(input io.Reader) (summary, error) {
+	return analyzeLabeled(input, nil)
+}
+
+func analyzeLabeled(input io.Reader, labels []annotation) (summary, error) {
 	result := summary{Trust: candidateTrust, Scalars: map[string]*scalarSummary{}}
+	byReference := map[string]map[string]int{}
+	if labels != nil {
+		if len(labels) == 0 {
+			return summary{}, fmt.Errorf("no annotations")
+		}
+		result.Evaluation = map[string]*evaluation{}
+		for _, label := range labels {
+			if label.Reference == "" || len(label.Scalars) == 0 || byReference[label.Reference] != nil {
+				return summary{}, fmt.Errorf("invalid or duplicate annotation reference %q", label.Reference)
+			}
+			for name := range label.Scalars {
+				if name == "" {
+					return summary{}, fmt.Errorf("empty annotated scalar name")
+				}
+			}
+			byReference[label.Reference] = label.Scalars
+		}
+	}
+	seenReferences := map[string]bool{}
 	get := func(name string) *scalarSummary {
 		if result.Scalars[name] == nil {
 			result.Scalars[name] = &scalarSummary{Candidates: map[int]int{}}
@@ -65,6 +100,28 @@ func analyze(input io.Reader) (summary, error) {
 			}
 			get(name).Agreed++
 		}
+		if labelsForFrame, ok := byReference[record.Reference]; ok {
+			if seenReferences[record.Reference] {
+				return summary{}, fmt.Errorf("line %d: duplicate annotated reference %q", line, record.Reference)
+			}
+			seenReferences[record.Reference] = true
+			for name, expected := range labelsForFrame {
+				if !seen[name] {
+					return summary{}, fmt.Errorf("line %d: annotated scalar %q missing from record", line, name)
+				}
+				if result.Evaluation[name] == nil {
+					result.Evaluation[name] = &evaluation{}
+				}
+				stats := result.Evaluation[name]
+				if actual, ok := record.Scalars[name]; !ok {
+					stats.Unknown++
+				} else if actual == expected {
+					stats.Correct++
+				} else {
+					stats.Incorrect++
+				}
+			}
+		}
 		result.Frames++
 	}
 	if err := scanner.Err(); err != nil {
@@ -73,19 +130,51 @@ func analyze(input io.Reader) (summary, error) {
 	if result.Frames == 0 {
 		return summary{}, fmt.Errorf("no collector records")
 	}
+	for ref := range byReference {
+		if !seenReferences[ref] {
+			return summary{}, fmt.Errorf("annotation reference %q not found", ref)
+		}
+	}
 	return result, nil
 }
 
 func run(args []string, stdout io.Writer) error {
-	if len(args) != 1 {
-		return fmt.Errorf("usage: collection-analysis recognition.jsonl")
+	if len(args) < 1 || len(args) > 2 {
+		return fmt.Errorf("usage: collection-analysis recognition.jsonl [annotations.json]")
 	}
 	file, err := os.Open(args[0])
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	result, err := analyze(file)
+	var labels []annotation
+	if len(args) == 2 {
+		data, err := os.ReadFile(args[1])
+		if err != nil {
+			return err
+		}
+		var raw []struct {
+			Reference string          `json:"reference"`
+			Scalars   map[string]*int `json:"scalars"`
+		}
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return fmt.Errorf("annotations: %w", err)
+		}
+		for _, item := range raw {
+			label := annotation{Reference: item.Reference, Scalars: map[string]int{}}
+			for name, value := range item.Scalars {
+				if value == nil {
+					return fmt.Errorf("annotation %q scalar %q has null value", item.Reference, name)
+				}
+				label.Scalars[name] = *value
+			}
+			labels = append(labels, label)
+		}
+		if labels == nil {
+			return fmt.Errorf("annotations must be a nonempty array")
+		}
+	}
+	result, err := analyzeLabeled(file, labels)
 	if err != nil {
 		return err
 	}

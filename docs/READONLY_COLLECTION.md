@@ -44,6 +44,14 @@ The collector accepts 1–1,200 frames per invocation and intervals of at least 
 
 On the Mac, copy a run's `recognition.jsonl` locally and summarize it with `go run ./cmd/collection-analysis /path/to/recognition.jsonl`. The JSON output counts frames, candidate values, unknown frames, and reported consecutive candidate agreements for each scalar. It retains the `unverified_candidate_not_for_actions` trust marker; agreement and counts do not validate recognition. The command reads only the JSONL, not the referenced screenshots, and does not train a model or report match results.
 
+To evaluate numeric candidates, independently inspect saved screenshots and create a private JSON array of labels. Use the exact `reference` string from each JSONL record, including the original Windows path, and include only scalars whose values you can determine:
+
+```json
+[{"reference":"C:\\runs\\frame1\\report.json","scalars":{"own_score":12,"opponent_score":8}}]
+```
+
+Run `go run ./cmd/collection-analysis /path/to/recognition.jsonl /path/to/annotations.json`. For each labelled scalar the `evaluation` object counts correct candidates, incorrect candidates and unknown predictions. Labels must reference unique records and scalar names present in those records; unmatched or duplicate references are errors. Unlabelled frames and scalars remain outside the evaluation. Labels and reference strings are not independently verified, and these per-frame counts are not match outcomes or a representative accuracy estimate.
+
 Each JSONL line has `captured_at`, `reference`, `scalars`, `unknown`, and the trust marker `unverified_candidate_not_for_actions`. `agreed`, when present, records agreement between consecutive candidate readings; it does not establish correctness. Menus, occlusion, and similar-looking glyphs can yield false values. These candidates are rejected by the gameplay evidence reader and are not connected to `Facts.Totals` or action selection. Validate frames manually before using them as research data; the demo does not provide reliable score recognition or autonomous gameplay.
 
 ## Offline hand annotation and evaluation
