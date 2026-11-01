@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"gwentcoachmvp/internal/matchlog"
-	"gwentcoachmvp/internal/strategy"
 )
 
 type Event = matchlog.Event
@@ -288,37 +287,11 @@ func compute(c Config) error {
 	actionCounts := map[string]int{}
 	for _, m := range items {
 		fingerprints = append(fingerprints, m.id+":"+digest(m.data))
-		var session string
-		for _, event := range m.events {
-			if event.SessionID != "" {
-				session = event.SessionID
-				break
-			}
-		}
+		// Session IDs do not establish policy, rules or catalog provenance.
 		target := &legacy
-		if session != "" {
-			target = &train
-			h := sha256.Sum256([]byte(session))
-			if h[0] < 51 {
-				target = &eval
-			}
-		}
 		target.Matches++
-		r := m.events[len(m.events)-1].Result
-		if r == nil {
-			target.Unknown++
-		} else {
-			switch *r {
-			case "win":
-				target.Wins++
-			case "loss":
-				target.Losses++
-			case "draw":
-				target.Draws++
-			default:
-				target.Unknown++
-			}
-		}
+		// No independently validated result evidence contract exists yet.
+		target.Unknown++
 		for _, t := range m.traces {
 			if t.Intent.ActionDomain == "gameplay" && t.Confirmed != nil {
 				target.Actions++
@@ -346,41 +319,40 @@ func compute(c Config) error {
 			}
 		}
 	}
+	candidate := filepath.Join(c.Store, "candidate.json")
+	if _, err := os.Stat(candidate); err == nil {
+		f, err := os.CreateTemp(c.Store, "quarantined-candidate-*.json")
+		if err != nil {
+			return err
+		}
+		name := f.Name()
+		if err = f.Close(); err != nil {
+			return err
+		}
+		if err = os.Rename(candidate, name); err != nil {
+			os.Remove(name)
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	report, err := json.MarshalIndent(struct {
 		Kind                 string `json:"kind"`
 		DataFingerprint      string `json:"data_fingerprint"`
 		Split                string `json:"split"`
 		Training, Evaluation Metrics
-		Legacy               Metrics        `json:"legacy_without_session"`
+		Quarantined          Metrics        `json:"quarantined_unverified_provenance"`
 		CandidateStatus      string         `json:"candidate_status"`
 		Agreement            any            `json:"heldout_baseline_candidate_agreement"`
 		AgreementReason      string         `json:"agreement_reason"`
 		ActionCounts         map[string]int `json:"training_action_counts"`
 		Limitation           string         `json:"limitation"`
-	}{"offline-statistics-v1", digest([]byte(strings.Join(fingerprints, "\n"))), "sha256(session_id)[0] < 51 is evaluation; missing session is descriptive only", train, eval, legacy, "insufficient_data", nil, "recorded logs do not contain ordered legal candidate sets", actionCounts, "neutral baseline; no trained policy, causal evaluation or promotion"}, "", "  ")
+	}{"offline-statistics-v1", digest([]byte(strings.Join(fingerprints, "\n"))), "no eligible sessions: policy, rules and catalog provenance unverified", train, eval, legacy, "insufficient_data", nil, "recorded logs do not contain ordered legal candidate sets", actionCounts, "outcomes unverified; no candidate or promotion"}, "", "  ")
 	if err != nil {
 		return err
 	}
 	if err = atomicWrite(filepath.Join(c.Store, "report.json"), append(report, '\n')); err != nil {
 		return err
 	}
-	if len(items) == 0 {
-		return nil
-	}
-	payload, err := json.Marshal(struct {
-		Kind        string         `json:"kind"`
-		CardWeights map[string]int `json:"card_weights"`
-		KindWeights map[string]int `json:"kind_weights"`
-	}{"action-ranker-v1", map[string]int{}, map[string]int{"play": 0, "pass": 0}})
-	if err != nil {
-		return err
-	}
-	b, err := strategy.MarshalArtifact(strategy.Artifact{
-		SchemaVersion: strategy.ArtifactSchemaVersion, PolicyVersion: c.PolicyVersion,
-		RulesVersion: c.RulesVersion, CatalogVersion: c.CatalogVersion, Payload: payload,
-	})
-	if err != nil {
-		return err
-	}
-	return atomicWrite(filepath.Join(c.Store, "candidate.json"), append(b, '\n'))
+	return nil
 }

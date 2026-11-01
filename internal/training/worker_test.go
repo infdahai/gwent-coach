@@ -1,10 +1,7 @@
 package training
 
 import (
-	"context"
 	"encoding/json"
-
-	"gwentcoachmvp/internal/strategy"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +34,7 @@ func TestIngestionRestartAndRejection(t *testing.T) {
 	event := func(id, result string) string {
 		return `{"schema_version":1,"match_id":"` + id + `","sequence":1,"utc":"2026-01-01T00:00:00Z","elapsed_ns":0,"event_type":"match_completed","result":"` + result + `"}` + "\n"
 	}
-	makeMatch("valid", event("valid", "unknown"), true, true)
+	makeMatch("valid", strings.Replace(event("valid", "win"), `"sequence":1`, `"session_id":"s1","sequence":1`, 1), true, true)
 	makeMatch("partial", event("partial", "win"), false, true)
 	makeMatch("broken", strings.TrimSpace(event("broken", "win")), true, true)
 	makeMatch("missing", event("missing", "win"), true, false)
@@ -55,36 +52,22 @@ func TestIngestionRestartAndRejection(t *testing.T) {
 			t.Errorf("%s: %s", id, statuses[id])
 		}
 	}
-	b, err := os.ReadFile(filepath.Join(store, "candidate.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var a struct {
-		Payload []byte `json:"payload"`
-		Digest  string `json:"digest"`
-	}
-	if err = json.Unmarshal(b, &a); err != nil {
-		t.Fatal(err)
-	}
-	artifact, err := strategy.LoadArtifact(b, strategy.Compatibility{RulesVersion: c.RulesVersion, CatalogVersion: c.CatalogVersion})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ranker, err := strategy.NewRanker(artifact.Payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	candidates := []string{`{"Kind":"pass"}`, `{"Kind":"play","Card":"a"}`}
-	choice, err := ranker.Choose(context.Background(), strategy.Observation{Candidates: candidates})
-	if err != nil || choice != candidates[0] {
-		t.Fatalf("neutral ranker: %q %v", choice, err)
-	}
-	if !strings.Contains(string(a.Payload), `"kind":"action-ranker-v1"`) {
-		t.Fatalf("unexpected payload: %s", a.Payload)
+	if _, err := os.Stat(filepath.Join(store, "candidate.json")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected candidate: %v", err)
 	}
 	report, err := os.ReadFile(filepath.Join(store, "report.json"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	var metrics struct {
+		Quarantined Metrics `json:"quarantined_unverified_provenance"`
+		Training    Metrics
+	}
+	if err := json.Unmarshal(report, &metrics); err != nil {
+		t.Fatal(err)
+	}
+	if metrics.Quarantined.Unknown != 1 || metrics.Quarantined.Wins != 0 || metrics.Training.Matches != 0 {
+		t.Fatalf("unverified data counted: %s", report)
 	}
 	if !strings.Contains(string(report), `"unknown": 1`) || strings.Contains(string(report), `"wins": 1`) {
 		t.Fatalf("unexpected metrics: %s", report)
