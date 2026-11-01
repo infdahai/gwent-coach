@@ -14,11 +14,21 @@ import (
 )
 
 // SemanticFromEvidence maps a complete view or an independently observed
-// terminal outcome. A partial result cannot authorize or confirm an action.
+// terminal outcome. A partial result cannot authorize an action.
 func SemanticFromEvidence(pair [2]stateestimate.Evidence, now time.Time, maxAge time.Duration) (SemanticObservation, error) {
 	estimated, err := stateestimate.Estimate(pair, now, maxAge)
 	if err != nil {
-		return SemanticObservation{}, err
+		// A contradictory complete view must never authorize a decision. The
+		// independently observed outcome can still support a terminal result.
+		partial := pair
+		for i := range partial {
+			partial[i].Facts = stateestimate.Facts{Outcome: pair[i].Facts.Outcome}
+		}
+		result, resultErr := stateestimate.Estimate(partial, now, maxAge)
+		if resultErr != nil || !result.ReadyFor(stateestimate.TaskResult) {
+			return SemanticObservation{}, err
+		}
+		estimated = result
 	}
 	if estimated.View == nil {
 		if !estimated.ReadyFor(stateestimate.TaskResult) {

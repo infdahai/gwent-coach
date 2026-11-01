@@ -67,6 +67,36 @@ func TestPartialTerminalEvidenceIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestInconsistentCompleteViewStillReportsIndependentResult(t *testing.T) {
+	cal, frames := evidenceFixture()
+	cal.Outcome = evidenceFact([]image.Image{frames[0]}, []string{"finished"}, []stateestimate.OutcomeFacts{{Finished: true, Winner: 1}}, 160)
+	for key, totals := range cal.Totals.Values {
+		totals.Score[0] = 999
+		cal.Totals.Values[key] = totals
+	}
+	reader, err := NewCalibratedEvidenceReader(cal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq := 0
+	a := nativeLoopAdapter{cfg: NativeLoopConfig{MatchID: "m"}, evidenceReader: reader, capture: func(context.Context) (loopFrame, error) {
+		seq++
+		return loopFrame{navFrame: navFrame{Reference: fmt.Sprint(seq), Captured: time.Now(), Width: 192, Height: 64}, Image: frames[0]}, nil
+	}}
+	o, err := a.observe(context.Background())
+	if err != nil || !o.Result || o.Eligible || o.PartialResult == nil || o.PartialResult.Winner != 1 {
+		t.Fatalf("partial terminal observation: %+v, %v", o, err)
+	}
+	cal.Outcome = evidenceFact([]image.Image{frames[0]}, []string{"ongoing"}, []stateestimate.OutcomeFacts{{Winner: -1}}, 160)
+	a.evidenceReader, err = NewCalibratedEvidenceReader(cal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.observe(context.Background()); err == nil {
+		t.Fatal("inconsistent decision view accepted")
+	}
+}
+
 func TestEvidenceEstimateFeedsLocalLoop(t *testing.T) {
 	cal, frames := evidenceFixture()
 	// Keep the independently labelled hand legal for this rules snapshot.

@@ -375,8 +375,12 @@ func (l LocalLoop) Run(ctx context.Context) (runErr error) {
 				if o.MatchID != pendingMatch {
 					return fmt.Errorf("match changed with an unresolved action")
 				}
-				// A terminal outcome alone cannot establish an action postcondition.
-				if o.PartialResult != nil || !changed || !l.Confirm(*pending, o) {
+				// Only pass has a native terminal-result postcondition. Both captures
+				// must follow delivery, even when no journal is attached.
+				if o.PartialResult != nil && (pending.Kind != "pass" || matchlog.ValidateConfirmation(o.MatchID, o.Source, o.CapturedAt, o.Frames, deliveredAt) != nil) {
+					continue
+				}
+				if !changed || !l.Confirm(*pending, o) {
 					continue
 				}
 				if l.Journal != nil {
