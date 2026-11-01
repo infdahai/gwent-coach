@@ -32,10 +32,12 @@ type CollectionRecord struct {
 	Agreed    map[string]int `json:"agreed,omitempty"`
 }
 
+const maxCollectionFrames = 1200
+
 // CollectReadOnly captures a bounded number of frames; capture owns platform safety.
 func CollectReadOnly(ctx context.Context, cfg CollectionConfig, capture func(context.Context) (CollectionFrame, error), output io.Writer) error {
-	if cfg.Count < 1 || cfg.Count > 100 || cfg.Interval < 100*time.Millisecond || capture == nil || output == nil {
-		return fmt.Errorf("collection requires 1..100 frames and interval >=100ms")
+	if cfg.Count < 1 || cfg.Count > maxCollectionFrames || cfg.Interval < 100*time.Millisecond || capture == nil || output == nil {
+		return fmt.Errorf("collection requires 1..%d frames and interval >=100ms", maxCollectionFrames)
 	}
 	names := make([]string, 0, len(cfg.Digits))
 	for name := range cfg.Digits {
