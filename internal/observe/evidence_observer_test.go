@@ -48,6 +48,24 @@ func TestNativeEvidenceObserverDoesNotUseStageView(t *testing.T) {
 	}
 }
 
+func TestPartialTerminalEvidenceIsReadOnly(t *testing.T) {
+	cal, frames := evidenceFixture()
+	cal.Totals = nil
+	cal.Outcome = evidenceFact([]image.Image{frames[0]}, []string{"finished"}, []stateestimate.OutcomeFacts{{Finished: true, Winner: 1}}, 160)
+	reader, err := NewCalibratedEvidenceReader(cal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, now := readEvidencePair(t, reader, frames[0])
+	observation, err := stateestimate.Estimate(pair, now, time.Second)
+	if err != nil || !observation.ReadyFor(stateestimate.TaskResult) || observation.ReadyFor(stateestimate.TaskDecision) || observation.View != nil {
+		t.Fatalf("partial result: %+v, %v", observation, err)
+	}
+	if _, err := SemanticFromEvidence(pair, now, time.Second); !errors.Is(err, ErrUnstableVisual) {
+		t.Fatalf("partial result reached action path: %v", err)
+	}
+}
+
 func TestEvidenceEstimateFeedsLocalLoop(t *testing.T) {
 	cal, frames := evidenceFixture()
 	// Keep the independently labelled hand legal for this rules snapshot.

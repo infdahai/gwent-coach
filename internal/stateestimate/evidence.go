@@ -88,10 +88,35 @@ type Evidence struct {
 	Targets       []Target
 }
 
+// Task identifies the evidence needed for a particular observation use. Readiness
+// does not authorize input or establish that a preceding action caused a result.
+type Task string
+
+const (
+	TaskStage    Task = "stage"
+	TaskResult   Task = "result"
+	TaskDecision Task = "decision"
+)
+
+// ReadyFor reports whether this observation supports the requested task. A
+// result requires independently observed terminal outcome facts; a stage label
+// alone never implies a result. Unknown tasks are not ready.
+func (o Observation) ReadyFor(task Task) bool {
+	switch task {
+	case TaskStage:
+		return o.Stage != "" && o.Stage != "unknown"
+	case TaskResult:
+		return o.Facts.Outcome != nil && o.Facts.Outcome.Finished && o.Facts.Outcome.Winner >= -1 && o.Facts.Outcome.Winner <= 1
+	case TaskDecision:
+		return o.View != nil && o.Eligible
+	default:
+		return false
+	}
+}
+
 // Observation retains agreed partial facts. View is nil until all required
 // facts agree and their public-state invariants hold. Eligible is always false
-// without a complete View. StateKey excludes capture IDs and timestamps, so
-// another frame of the same semantic state does not create a decision revision.
+// without a complete View. StateKey excludes capture IDs and timestamps.
 type Observation struct {
 	Frame                          FrameRef
 	Sources                        [2]string
