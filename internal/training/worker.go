@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,37 +13,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"gwentcoachmvp/internal/matchlog"
+	"gwentcoachmvp/internal/strategy"
 )
 
-type FrameEvidence struct {
-	Source     string    `json:"source"`
-	MatchID    string    `json:"match_id"`
-	CapturedAt time.Time `json:"captured_at"`
-}
-type Event struct {
-	SchemaVersion      int                 `json:"schema_version"`
-	MatchID            string              `json:"match_id"`
-	Sequence           uint64              `json:"sequence"`
-	UTC                string              `json:"utc"`
-	ElapsedNS          int64               `json:"elapsed_ns"`
-	EventType          string              `json:"event_type"`
-	ActionID           string              `json:"action_id"`
-	ActionDomain       string              `json:"action_domain"`
-	Step               *uint64             `json:"step"`
-	DeliveredAt        *string             `json:"delivered_at"`
-	DeliveryStatus     string              `json:"delivery_status"`
-	StateVersion       *uint64             `json:"state_version"`
-	FramePath          *string             `json:"frame_path"`
-	ActionIntent       any                 `json:"action_intent"`
-	EventsSent         *int                `json:"events_sent"`
-	ConfirmationFrames []FrameEvidence     `json:"confirmation_frames"`
-	CapturedAt         *string             `json:"captured_at"`
-	Confirmation       *string             `json:"confirmation"`
-	TimingMS           map[string]*float64 `json:"timing_ms"`
-	Result             *string             `json:"result"`
-	ManualIntervention *bool               `json:"manual_intervention"`
-	Error              *string             `json:"error"`
-}
+type Event = matchlog.Event
 type Report struct {
 	MatchID string `json:"match_id"`
 	Status  string `json:"status"`
@@ -67,7 +41,7 @@ type item struct {
 	id     string
 	data   []byte
 	events []Event
-	traces []ActionTrace
+	traces []matchlog.ActionTrace
 }
 
 func validate(id string, data []byte) (item, error) {
@@ -78,6 +52,7 @@ func validate(id string, data []byte) (item, error) {
 	s.Buffer(make([]byte, 4096), 16<<20)
 	var events []Event
 	var last int64
+	var session string
 	for s.Scan() {
 		var e Event
 		if err := json.Unmarshal(s.Bytes(), &e); err != nil {
@@ -86,11 +61,17 @@ func validate(id string, data []byte) (item, error) {
 		if e.SchemaVersion != 1 || e.MatchID != id || e.Sequence != uint64(len(events)+1) || e.EventType == "" || e.ElapsedNS < 0 || (len(events) > 0 && e.ElapsedNS < last) {
 			return item{}, fmt.Errorf("invalid event identity, order or timing")
 		}
+		if e.SessionID != "" {
+			if session != "" && session != e.SessionID {
+				return item{}, fmt.Errorf("conflicting session IDs")
+			}
+			session = e.SessionID
+		}
 		if _, err := time.Parse(time.RFC3339Nano, e.UTC); err != nil {
 			return item{}, err
 		}
 		for _, v := range e.TimingMS {
-			if v != nil && *v < 0 {
+			if v < 0 {
 				return item{}, fmt.Errorf("negative timing")
 			}
 		}
@@ -110,7 +91,7 @@ func validate(id string, data []byte) (item, error) {
 	if r != nil && *r != "win" && *r != "loss" && *r != "draw" && *r != "unknown" {
 		return item{}, fmt.Errorf("invalid result")
 	}
-	traces, err := ReplayActions(events)
+	traces, err := matchlog.ReplayActions(events)
 	if err != nil {
 		return item{}, err
 	}
@@ -298,21 +279,29 @@ func compute(c Config) error {
 		}
 		items = append(items, m)
 	}
-	if len(items) == 0 {
-		return nil
-	}
 	sort.Slice(items, func(i, j int) bool { return items[i].id < items[j].id })
-	// A match is the smallest available grouping; no session identifier exists in the protocol.
+	// Legacy logs without session provenance remain descriptive only.
 	train := Metrics{Timing: map[string][]float64{}}
 	eval := Metrics{Timing: map[string][]float64{}}
+	legacy := Metrics{Timing: map[string][]float64{}}
 	var fingerprints []string
 	actionCounts := map[string]int{}
 	for _, m := range items {
 		fingerprints = append(fingerprints, m.id+":"+digest(m.data))
-		h := sha256.Sum256([]byte(m.id))
-		target := &train
-		if h[0] < 51 {
-			target = &eval
+		var session string
+		for _, event := range m.events {
+			if event.SessionID != "" {
+				session = event.SessionID
+				break
+			}
+		}
+		target := &legacy
+		if session != "" {
+			target = &train
+			h := sha256.Sum256([]byte(session))
+			if h[0] < 51 {
+				target = &eval
+			}
 		}
 		target.Matches++
 		r := m.events[len(m.events)-1].Result
@@ -353,9 +342,7 @@ func compute(c Config) error {
 				target.Interventions++
 			}
 			for k, v := range e.TimingMS {
-				if v != nil {
-					target.Timing[k] = append(target.Timing[k], *v)
-				}
+				target.Timing[k] = append(target.Timing[k], v)
 			}
 		}
 	}
@@ -364,14 +351,21 @@ func compute(c Config) error {
 		DataFingerprint      string `json:"data_fingerprint"`
 		Split                string `json:"split"`
 		Training, Evaluation Metrics
+		Legacy               Metrics        `json:"legacy_without_session"`
+		CandidateStatus      string         `json:"candidate_status"`
+		Agreement            any            `json:"heldout_baseline_candidate_agreement"`
+		AgreementReason      string         `json:"agreement_reason"`
 		ActionCounts         map[string]int `json:"training_action_counts"`
 		Limitation           string         `json:"limitation"`
-	}{"offline-statistics-v1", digest([]byte(strings.Join(fingerprints, "\n"))), "sha256(match_id)[0] < 51 is evaluation", train, eval, actionCounts, "descriptive baseline only; no trained policy, causal evaluation, promotion, or session-level separation"}, "", "  ")
+	}{"offline-statistics-v1", digest([]byte(strings.Join(fingerprints, "\n"))), "sha256(session_id)[0] < 51 is evaluation; missing session is descriptive only", train, eval, legacy, "insufficient_data", nil, "recorded logs do not contain ordered legal candidate sets", actionCounts, "neutral baseline; no trained policy, causal evaluation or promotion"}, "", "  ")
 	if err != nil {
 		return err
 	}
 	if err = atomicWrite(filepath.Join(c.Store, "report.json"), append(report, '\n')); err != nil {
 		return err
+	}
+	if len(items) == 0 {
+		return nil
 	}
 	payload, err := json.Marshal(struct {
 		Kind        string         `json:"kind"`
@@ -381,23 +375,10 @@ func compute(c Config) error {
 	if err != nil {
 		return err
 	}
-	a := struct {
-		SchemaVersion  int    `json:"schema_version"`
-		PolicyVersion  string `json:"policy_version"`
-		RulesVersion   string `json:"rules_version"`
-		CatalogVersion string `json:"catalog_version"`
-		Payload        []byte `json:"payload"`
-		Digest         string `json:"digest"`
-	}{1, c.PolicyVersion, c.RulesVersion, c.CatalogVersion, payload, ""}
-	h := sha256.New()
-	for _, field := range [][]byte{[]byte("1"), []byte(a.PolicyVersion), []byte(a.RulesVersion), []byte(a.CatalogVersion), a.Payload} {
-		var size [8]byte
-		binary.BigEndian.PutUint64(size[:], uint64(len(field)))
-		h.Write(size[:])
-		h.Write(field)
-	}
-	a.Digest = "sha256:" + hex.EncodeToString(h.Sum(nil))
-	b, err := json.MarshalIndent(a, "", "  ")
+	b, err := strategy.MarshalArtifact(strategy.Artifact{
+		SchemaVersion: strategy.ArtifactSchemaVersion, PolicyVersion: c.PolicyVersion,
+		RulesVersion: c.RulesVersion, CatalogVersion: c.CatalogVersion, Payload: payload,
+	})
 	if err != nil {
 		return err
 	}

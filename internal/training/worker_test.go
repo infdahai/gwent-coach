@@ -1,7 +1,10 @@
 package training
 
 import (
+	"context"
 	"encoding/json"
+
+	"gwentcoachmvp/internal/strategy"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +65,19 @@ func TestIngestionRestartAndRejection(t *testing.T) {
 	}
 	if err = json.Unmarshal(b, &a); err != nil {
 		t.Fatal(err)
+	}
+	artifact, err := strategy.LoadArtifact(b, strategy.Compatibility{RulesVersion: c.RulesVersion, CatalogVersion: c.CatalogVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ranker, err := strategy.NewRanker(artifact.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := []string{`{"Kind":"pass"}`, `{"Kind":"play","Card":"a"}`}
+	choice, err := ranker.Choose(context.Background(), strategy.Observation{Candidates: candidates})
+	if err != nil || choice != candidates[0] {
+		t.Fatalf("neutral ranker: %q %v", choice, err)
 	}
 	if !strings.Contains(string(a.Payload), `"kind":"action-ranker-v1"`) {
 		t.Fatalf("unexpected payload: %s", a.Payload)
