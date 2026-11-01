@@ -76,6 +76,61 @@ func TestRunWithAnnotations(t *testing.T) {
 	}
 }
 
+func TestImportCollectionsIncremental(t *testing.T) {
+	root := t.TempDir()
+	source, dest := filepath.Join(root, "source"), filepath.Join(root, "dest")
+	runDir := filepath.Join(source, "readonly-collection-1")
+	for _, dir := range []string{runDir, dest} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	line := `{"trust":"unverified_candidate_not_for_actions","reference":"frame","captured_at":"2026-01-01T00:00:00Z","scalars":{"score":0},"unknown":[]}` + "\n"
+	input := filepath.Join(runDir, "recognition.jsonl")
+	write := func(data string) {
+		t.Helper()
+		if err := os.WriteFile(input, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(line + "{partial")
+	var out bytes.Buffer
+	if err := run([]string{"import", source, dest}, &out); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dest, "readonly-collection-1.jsonl")
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != line {
+		t.Fatalf("partial import: %q %v", got, err)
+	}
+	write(line + line)
+	if err := importCollections(source, dest, &out); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(target)
+	if err != nil || string(got) != line+line {
+		t.Fatalf("incremental import: %q %v", got, err)
+	}
+	if err := importCollections(source, dest, &out); err != nil {
+		t.Fatal(err)
+	}
+	write(line)
+	if err := importCollections(source, dest, &out); err == nil {
+		t.Fatal("accepted truncated source")
+	}
+	write(line + "{}\n")
+	if err := importCollections(source, dest, &out); err == nil {
+		t.Fatal("accepted invalid record")
+	}
+	got, _ = os.ReadFile(target)
+	if string(got) != line+line {
+		t.Fatal("overwrote imported data")
+	}
+	if err := importCollections(source, source, &out); err == nil {
+		t.Fatal("accepted shared source and destination")
+	}
+}
+
 func TestAnalyzeRejectsInvalidRecords(t *testing.T) {
 	valid := `{"trust":"unverified_candidate_not_for_actions","reference":"frame","captured_at":"2026-01-01T00:00:00Z","scalars":{"score":1},"unknown":[]}`
 	for _, input := range []string{
