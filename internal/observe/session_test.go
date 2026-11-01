@@ -52,9 +52,10 @@ func TestSessionRecordsPartialVisualResult(t *testing.T) {
 		ExecuteInput: func(context.Context, Action) error { inputs++; return nil },
 		RunMatch: func(ctx context.Context, id string, j *ActionJournal) (SemanticObservation, error) {
 			seq := 0
+			base := time.Now().Add(-time.Second)
 			a := nativeLoopAdapter{cfg: NativeLoopConfig{MatchID: id}, evidenceReader: reader, capture: func(context.Context) (loopFrame, error) {
 				seq++
-				return loopFrame{navFrame: navFrame{Reference: fmt.Sprint(seq), Captured: time.Now(), Width: 192, Height: 64}, Image: frames[0]}, nil
+				return loopFrame{navFrame: navFrame{Reference: fmt.Sprint(seq), Captured: base.Add(time.Duration(seq) * time.Millisecond), Width: 192, Height: 64}, Image: frames[0]}, nil
 			}}
 			var result SemanticObservation
 			loop := LocalLoop{Observe: a.observe, Decisions: boundaryEvaluator{}, Journal: j, DecisionBudget: time.Second, ConfirmationBudget: time.Second,
@@ -70,8 +71,11 @@ func TestSessionRecordsPartialVisualResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inputs != 0 || len(events) != 3 || events[1].EventType != "result_observed" || events[1].Result == nil || *events[1].Result != "loss" || events[2].EventType != "match_completed" || len(events[1].ConfirmationFrames) != 2 {
+	if inputs != 0 || len(events) != 3 || events[1].EventType != "result_observed" || events[1].Result == nil || *events[1].Result != "loss" || events[1].ResultContract != 1 || events[1].ResultPlayer == nil || *events[1].ResultPlayer != 0 || events[2].EventType != "match_completed" || len(events[1].ConfirmationFrames) != 2 {
 		t.Fatalf("inputs=%d events=%+v", inputs, events)
+	}
+	if err := matchlog.ValidateResultClaims(events); err != nil {
+		t.Fatalf("%v: %+v", err, events[1])
 	}
 }
 

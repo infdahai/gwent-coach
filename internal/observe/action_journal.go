@@ -239,7 +239,11 @@ func (j *ActionJournal) Result(snapshot Snapshot, observation SemanticObservatio
 		}
 	}
 	captured := observation.CapturedAt.UTC().Format(time.RFC3339Nano)
-	if err := j.writer.AppendDurable(matchlog.Event{EventType: "result_observed", StateVersion: &snapshot.Version, Phase: &observation.Phase, FramePath: &observation.Source, VisibleState: visible, Result: &result, CapturedAt: &captured, ConfirmationFrames: append([]matchlog.FrameEvidence(nil), observation.Frames...), CalibrationID: observation.CalibrationID}); err != nil {
+	event := matchlog.Event{EventType: "result_observed", StateVersion: &snapshot.Version, Phase: &observation.Phase, FramePath: &observation.Source, VisibleState: visible, Result: &result, CapturedAt: &captured, ConfirmationFrames: append([]matchlog.FrameEvidence(nil), observation.Frames...), CalibrationID: observation.CalibrationID}
+	if observation.PartialResult != nil {
+		event.ResultContract, event.ResultPlayer = 1, &observation.Player
+	}
+	if err := j.writer.AppendDurable(event); err != nil {
 		return err
 	}
 	j.result = &result

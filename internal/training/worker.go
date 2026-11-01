@@ -107,6 +107,9 @@ func validate(id string, data []byte) (item, error) {
 	if r != nil && *r != "win" && *r != "loss" && *r != "draw" && *r != "unknown" {
 		return item{}, fmt.Errorf("invalid result")
 	}
+	if err := matchlog.ValidateResultClaims(events); err != nil {
+		return item{}, err
+	}
 	traces, err := matchlog.ReplayActions(events)
 	if err != nil {
 		return item{}, err
