@@ -69,12 +69,25 @@ func TestIngestionRestartAndRejection(t *testing.T) {
 	var metrics struct {
 		Quarantined Metrics `json:"quarantined_unverified_provenance"`
 		Training    Metrics
+		Inventory   []struct {
+			MatchID        string `json:"match_id"`
+			EventDigest    string `json:"event_digest"`
+			ClaimedSession string `json:"claimed_session_id"`
+			ClaimedResult  string `json:"claimed_result"`
+		} `json:"quarantine_inventory_unverified_claims"`
 	}
 	if err := json.Unmarshal(report, &metrics); err != nil {
 		t.Fatal(err)
 	}
 	if metrics.Quarantined.Unknown != 1 || metrics.Quarantined.Wins != 0 || metrics.Training.Matches != 0 {
 		t.Fatalf("unverified data counted: %s", report)
+	}
+	stored, err := os.ReadFile(filepath.Join(store, "matches", "valid.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics.Inventory) != 1 || metrics.Inventory[0].MatchID != "valid" || metrics.Inventory[0].EventDigest != digest(stored) || metrics.Inventory[0].ClaimedSession != "s1" || metrics.Inventory[0].ClaimedResult != "win" {
+		t.Fatalf("unexpected quarantine inventory: %+v", metrics.Inventory)
 	}
 	if !strings.Contains(string(report), `"unknown": 1`) || strings.Contains(string(report), `"wins": 1`) {
 		t.Fatalf("unexpected metrics: %s", report)
@@ -87,6 +100,10 @@ func TestIngestionRestartAndRejection(t *testing.T) {
 		if r.MatchID == "valid" && r.Status != "duplicate" {
 			t.Fatalf("restart: %+v", r)
 		}
+	}
+	restartedReport, err := os.ReadFile(filepath.Join(store, "report.json"))
+	if err != nil || string(restartedReport) != string(report) {
+		t.Fatalf("report changed on restart: %v", err)
 	}
 }
 

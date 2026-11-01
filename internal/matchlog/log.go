@@ -47,6 +47,8 @@ type Event struct {
 	Confirmation       *string            `json:"confirmation"`
 	TimingMS           map[string]float64 `json:"timing_ms"`
 	Result             *string            `json:"result"`
+	ResultContract     int                `json:"result_contract,omitempty"`
+	ResultPlayer       *int               `json:"result_player,omitempty"`
 	GG                 *bool              `json:"gg"`
 	ManualIntervention *bool              `json:"manual_intervention"`
 	Error              *string            `json:"error"`

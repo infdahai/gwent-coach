@@ -10,6 +10,7 @@ import (
 
 	"gwentcoachmvp/internal/matchlog"
 	"gwentcoachmvp/internal/rules"
+	"gwentcoachmvp/internal/stateestimate"
 )
 
 // SemanticObservation must come from a state estimator, not a phase label.
@@ -24,6 +25,7 @@ type SemanticObservation struct {
 	View                    rules.View
 	HandOrder               []string
 	Eligible, Result        bool
+	PartialResult           *stateestimate.OutcomeFacts `json:",omitempty"`
 }
 
 // LocalLoop connects a persistent observation producer to one decision service.
@@ -31,14 +33,19 @@ type SemanticObservation struct {
 // a returned error is uncertain delivery and terminates the loop without retry.
 // Confirm must compare an action-specific postcondition with fresh observation.
 func semanticState(o SemanticObservation) ([]byte, error) {
+	var view *rules.View
+	if o.PartialResult == nil {
+		view = &o.View
+	}
 	return json.Marshal(struct {
 		MatchID                 string
 		CalibrationID, StateKey string
 		Player                  int
-		View                    rules.View
+		View                    *rules.View `json:",omitempty"`
 		HandOrder               []string
 		Eligible, Result        bool
-	}{o.MatchID, o.CalibrationID, o.StateKey, o.Player, o.View, o.HandOrder, o.Eligible, o.Result})
+		PartialResult           *stateestimate.OutcomeFacts `json:",omitempty"`
+	}{o.MatchID, o.CalibrationID, o.StateKey, o.Player, view, o.HandOrder, o.Eligible, o.Result, o.PartialResult})
 }
 
 // GuardedExecution connects fresh semantic observation to a concrete input
@@ -317,6 +324,14 @@ func (l LocalLoop) Run(ctx context.Context) (runErr error) {
 				return frame.err
 			}
 			o := frame.observation
+			if o.PartialResult != nil {
+				if !o.Result || o.Eligible || o.CalibrationID == "" || o.Player < 0 || o.Player > 1 || !o.PartialResult.Finished || o.PartialResult.Winner < -1 || o.PartialResult.Winner > 1 {
+					return fmt.Errorf("invalid partial result")
+				}
+				if err := matchlog.ValidateConfirmation(o.MatchID, o.Source, o.CapturedAt, o.Frames, time.Unix(0, 0)); err != nil {
+					return err
+				}
+			}
 			currentObservation = o
 			if o.Source == "" || o.MatchID == "" || o.CapturedAt.IsZero() {
 				return fmt.Errorf("missing or stale semantic observation")
@@ -332,8 +347,18 @@ func (l LocalLoop) Run(ctx context.Context) (runErr error) {
 				}
 				continue
 			}
-			if time.Since(o.CapturedAt) < 0 || time.Since(o.CapturedAt) > 2*time.Second {
+			if time.Since(o.CapturedAt) < 0 || time.Since(o.CapturedAt) > 2*time.Second || (o.PartialResult != nil && time.Since(o.Frames[0].CapturedAt) > 2*time.Second) {
 				return fmt.Errorf("missing or stale semantic observation")
+			}
+			if pending != nil {
+				if o.MatchID != pendingMatch {
+					return fmt.Errorf("match changed with an unresolved action")
+				}
+				// Invalid terminal evidence must not alter the published state:
+				// a later pair may contain the same result with fresh captures.
+				if o.PartialResult != nil && (pending.Kind != "pass" || matchlog.ValidateConfirmation(o.MatchID, o.Source, o.CapturedAt, o.Frames, deliveredAt) != nil) {
+					continue
+				}
 			}
 			state, err := semanticState(o)
 			if err != nil {
@@ -357,9 +382,6 @@ func (l LocalLoop) Run(ctx context.Context) (runErr error) {
 				active = nil
 			}
 			if pending != nil {
-				if o.MatchID != pendingMatch {
-					return fmt.Errorf("match changed with an unresolved action")
-				}
 				if !changed || !l.Confirm(*pending, o) {
 					continue
 				}
@@ -378,7 +400,7 @@ func (l LocalLoop) Run(ctx context.Context) (runErr error) {
 			if !transitionUntil.IsZero() && o.Phase != "mulligan" {
 				transitionUntil = time.Time{}
 			}
-			if l.OnRoundStart != nil && !o.Eligible && o.Phase == "mulligan" && o.View.Round > lastMulliganRound {
+			if l.OnRoundStart != nil && o.PartialResult == nil && !o.Eligible && o.Phase == "mulligan" && o.View.Round > lastMulliganRound {
 				lastMulliganRound = o.View.Round
 				if err := l.OnRoundStart(ctx, o); err != nil {
 					return fmt.Errorf("mulligan transition unresolved, do not replay: %w", err)

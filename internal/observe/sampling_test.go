@@ -2,6 +2,7 @@ package observe
 
 import (
 	"bytes"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -9,6 +10,26 @@ import (
 	"testing"
 	"time"
 )
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestTimedWriter(t *testing.T) {
+	var b bytes.Buffer
+	w := &timedWriter{writer: &b}
+	if _, err := encodeFrame(w, image.NewRGBA(image.Rect(0, 0, 8, 8)), Sampling{JPEGQuality: 85}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jpeg.Decode(&b); err != nil || w.duration <= 0 {
+		t.Fatalf("invalid JPEG or timing: %v, %v", err, w.duration)
+	}
+	want := errors.New("write failed")
+	w = &timedWriter{writer: failingWriter{want}}
+	if _, err := encodeFrame(w, image.NewRGBA(image.Rect(0, 0, 8, 8)), Sampling{JPEGQuality: 85}); !errors.Is(err, want) {
+		t.Fatalf("write error = %v, want %v", err, want)
+	}
+}
 
 func TestSamplingValidation(t *testing.T) {
 	for _, s := range []Sampling{{}, {Count: 10001}, {Count: 2, Interval: time.Second}, {Count: 2, Interval: time.Millisecond, StopFile: "stop"}, {Count: 1, MaxWidth: -1}, {Count: 1, JPEGQuality: 101}} {

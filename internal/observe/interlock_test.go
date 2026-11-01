@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -58,11 +59,15 @@ func TestModelDigestBinding(t *testing.T) {
 }
 func TestUnresolvedBlocksDifferentSession(t *testing.T) {
 	root := t.TempDir()
-	first := Navigation{StateDir: t.TempDir(), InterlockDir: root, StopFile: "pause", Steps: 1}
-	send := func(navFrame, Transition) error { return os.ErrDeadlineExceeded }
-	obs := func() (navFrame, error) { return navFrame{Phase: "main", Captured: time.Now()}, nil }
-	if runNavigation(first, obs, send, func() error { return nil }) == nil {
-		t.Fatal("expected delivery failure")
+	first := Navigation{StateDir: t.TempDir(), InterlockDir: root, StopFile: "pause", Steps: 1, plan: NavigationPlan{Transitions: []Transition{{From: "main", To: "training"}}}}
+	sends, frames := 0, 0
+	send := func(navFrame, Transition) error { sends++; return os.ErrDeadlineExceeded }
+	obs := func() (navFrame, error) {
+		frames++
+		return navFrame{Phase: "main", Reference: fmt.Sprint(frames), Captured: time.Now()}, nil
+	}
+	if runNavigation(first, obs, send, func() error { return nil }) == nil || sends != 1 {
+		t.Fatalf("expected one uncertain delivery, sends=%d", sends)
 	}
 	first.StateDir = t.TempDir()
 	calls := 0

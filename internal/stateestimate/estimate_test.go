@@ -66,6 +66,33 @@ func TestConflictingEvidenceStaysUnknown(t *testing.T) {
 	}
 }
 
+func TestTaskReadinessWithPartialEvidence(t *testing.T) {
+	pair, now := completePair()
+	pair[0].Facts = Facts{Outcome: &OutcomeFacts{Finished: true, Winner: 1}}
+	pair[1].Facts = Facts{Outcome: &OutcomeFacts{Finished: true, Winner: 1}}
+	o, err := Estimate(pair, now, 2*time.Second)
+	if err != nil || !o.ReadyFor(TaskResult) || o.View != nil || o.Eligible || o.ReadyFor(Task("other")) {
+		t.Fatalf("partial readiness: %+v, %v", o, err)
+	}
+	pair[1].Facts.Outcome.Winner = 0
+	pair[1].Stage = "other"
+	o, err = Estimate(pair, now, 2*time.Second)
+	if err != nil || o.ReadyFor(TaskResult) {
+		t.Fatalf("disagreement marked ready: %+v, %v", o, err)
+	}
+	pair, now = completePair()
+	o, err = Estimate(pair, now, 2*time.Second)
+	if err != nil || !o.Eligible || o.ReadyFor(TaskResult) {
+		t.Fatalf("decision readiness: %+v, %v", o, err)
+	}
+	pair[0].Facts = Facts{Outcome: &OutcomeFacts{Finished: true, Winner: 2}}
+	pair[1].Facts = Facts{Outcome: &OutcomeFacts{Finished: true, Winner: 2}}
+	o, err = Estimate(pair, now, 2*time.Second)
+	if err != nil || o.ReadyFor(TaskResult) {
+		t.Fatalf("invalid partial outcome marked ready: %+v, %v", o, err)
+	}
+}
+
 func TestEvidenceBindingAndFreshness(t *testing.T) {
 	cases := map[string]func(*[2]Evidence){
 		"same capture":          func(p *[2]Evidence) { p[1].Frame.ID = p[0].Frame.ID },

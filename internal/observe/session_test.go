@@ -11,12 +11,14 @@ import (
 	"image/draw"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"gwentcoachmvp/internal/cards"
 	"gwentcoachmvp/internal/matchlog"
 	"gwentcoachmvp/internal/rules"
+	"gwentcoachmvp/internal/stateestimate"
 	"gwentcoachmvp/internal/uiphase"
 )
 
@@ -30,6 +32,167 @@ func (h offlineSessionHost) ExecuteInput(ctx context.Context, a Action) error {
 }
 func (h offlineSessionHost) RunMatch(ctx context.Context, id string, j *ActionJournal) (SemanticObservation, error) {
 	return h.session.RunMatch(ctx, id, j)
+}
+
+func TestSessionRecordsPartialVisualResult(t *testing.T) {
+	cal, frames := evidenceFixture()
+	cal.Totals = nil
+	cal.Outcome = evidenceFact([]image.Image{frames[0]}, []string{"finished"}, []stateestimate.OutcomeFacts{{Finished: true, Winner: 1}}, 160)
+	reader, err := NewCalibratedEvidenceReader(cal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	inputs := 0
+	s := TrainingSession{ID: "partial", LogRoot: root, StartMatch: 1, Matches: 1, TransitionBudget: time.Second,
+		ObserveStage: func(context.Context, string) (uiphase.Event, error) {
+			t.Fatal("unexpected navigation")
+			return uiphase.Event{}, nil
+		},
+		ExecuteInput: func(context.Context, Action) error { inputs++; return nil },
+		RunMatch: func(ctx context.Context, id string, j *ActionJournal) (SemanticObservation, error) {
+			seq := 0
+			base := time.Now().Add(-time.Second)
+			a := nativeLoopAdapter{cfg: NativeLoopConfig{MatchID: id}, evidenceReader: reader, capture: func(context.Context) (loopFrame, error) {
+				seq++
+				return loopFrame{navFrame: navFrame{Reference: fmt.Sprint(seq), Captured: base.Add(time.Duration(seq) * time.Millisecond), Width: 192, Height: 64}, Image: frames[0]}, nil
+			}}
+			var result SemanticObservation
+			loop := LocalLoop{Observe: a.observe, Decisions: boundaryEvaluator{}, Journal: j, DecisionBudget: time.Second, ConfirmationBudget: time.Second,
+				Execute: func(context.Context, Snapshot, rules.Action, time.Time) error { inputs++; return nil },
+				Confirm: func(rules.Action, SemanticObservation) bool { t.Fatal("unexpected confirmation"); return false }, OnResult: func(o SemanticObservation) { result = o }}
+			err := loop.Run(ctx)
+			return result, err
+		}}
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events, err := matchlog.Read(filepath.Join(root, "partial-000001", "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inputs != 0 || len(events) != 3 || events[1].EventType != "result_observed" || events[1].Result == nil || *events[1].Result != "loss" || events[1].ResultContract != 1 || events[1].ResultPlayer == nil || *events[1].ResultPlayer != 0 || events[2].EventType != "match_completed" || len(events[1].ConfirmationFrames) != 2 {
+		t.Fatalf("inputs=%d events=%+v", inputs, events)
+	}
+	if err := matchlog.ValidateResultClaims(events); err != nil {
+		t.Fatalf("%v: %+v", err, events[1])
+	}
+}
+
+func TestPartialResultRequiresTwoBoundFrames(t *testing.T) {
+	now := time.Now()
+	for _, frames := range [][]matchlog.FrameEvidence{
+		nil,
+		{{Source: "same", MatchID: "m", CapturedAt: now.Add(-time.Millisecond)}, {Source: "same", MatchID: "m", CapturedAt: now}},
+		{{Source: "first", MatchID: "other", CapturedAt: now.Add(-time.Millisecond)}, {Source: "result", MatchID: "m", CapturedAt: now}},
+	} {
+		called := false
+		o := SemanticObservation{Source: "result", MatchID: "m", Phase: "result", CapturedAt: now, CalibrationID: "cal", Frames: frames, Result: true, PartialResult: &stateestimate.OutcomeFacts{Finished: true, Winner: 0}}
+		loop := LocalLoop{Decisions: boundaryEvaluator{}, DecisionBudget: time.Second, ConfirmationBudget: time.Second,
+			Observe: func(context.Context) (SemanticObservation, error) { return o, nil },
+			Execute: func(context.Context, Snapshot, rules.Action, time.Time) error {
+				t.Fatal("unexpected input")
+				return nil
+			},
+			Confirm: func(rules.Action, SemanticObservation) bool { return false }, OnResult: func(SemanticObservation) { called = true }}
+		if err := loop.Run(context.Background()); err == nil || called {
+			t.Fatalf("invalid frames accepted: %+v, %v", frames, err)
+		}
+	}
+}
+
+type partialResultEvaluator struct{ action rules.Action }
+
+func (e partialResultEvaluator) Candidates(rules.DecisionInput) ([]rules.Action, error) {
+	return []rules.Action{e.action}, nil
+}
+func (partialResultEvaluator) ValidateAction(rules.DecisionInput, rules.Action) error { return nil }
+
+func TestPartialResultDoesNotConfirmPendingAction(t *testing.T) {
+	sink := &receiptSink{}
+	j := NewActionJournal(sink)
+	resultFrame := make(chan SemanticObservation, 1)
+	first := true
+	confirmed, results := 0, 0
+	loop := LocalLoop{Decisions: partialResultEvaluator{action: rules.Action{Kind: "play"}}, Journal: j, DecisionBudget: time.Second, ConfirmationBudget: 40 * time.Millisecond,
+		Observe: func(ctx context.Context) (SemanticObservation, error) {
+			if first {
+				first = false
+				return SemanticObservation{Source: "turn", MatchID: "m", Phase: "turn", CapturedAt: time.Now(), Eligible: true}, nil
+			}
+			select {
+			case observation := <-resultFrame:
+				return observation, nil
+			case <-ctx.Done():
+				return SemanticObservation{}, ctx.Err()
+			}
+		},
+		Execute: func(_ context.Context, _ Snapshot, _ rules.Action, _ time.Time) error {
+			err := j.ExecuteStep(Action{Kind: "click", Reference: "turn", X: 1, Y: 1}, func(a Action) error {
+				return a.onReceipt(InputReceipt{Outcome: "delivered", EventsSent: 2, DeliveredAt: time.Now()})
+			})
+			now := time.Now()
+			resultFrame <- SemanticObservation{Source: "result", MatchID: "m", Phase: "result", CapturedAt: now, CalibrationID: "cal", Frames: []matchlog.FrameEvidence{{Source: "prior", MatchID: "m", CapturedAt: now.Add(-time.Millisecond)}, {Source: "result", MatchID: "m", CapturedAt: now}}, Result: true, PartialResult: &stateestimate.OutcomeFacts{Finished: true, Winner: 1}}
+			return err
+		}, Confirm: func(rules.Action, SemanticObservation) bool { confirmed++; return true }, OnResult: func(SemanticObservation) { results++ }}
+	err := loop.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "confirmation timed out") || confirmed != 0 || results != 0 || j.Pending() == nil {
+		t.Fatalf("err=%v confirms=%d results=%d pending=%+v", err, confirmed, results, j.Pending())
+	}
+	for _, event := range sink.events {
+		if event.EventType == "result_observed" || event.EventType == "action_confirmed" {
+			t.Fatalf("unexpected event %+v", event)
+		}
+	}
+}
+
+func TestPartialResultConfirmsPassAfterDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		beforeDelivery bool
+	}{{"fresh", false}, {"first frame before delivery", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &receiptSink{}
+			j := NewActionJournal(sink)
+			frames := make(chan SemanticObservation, 2)
+			first := true
+			adapter := nativeLoopAdapter{before: SemanticObservation{View: rules.View{Round: 3}}}
+			results := 0
+			loop := LocalLoop{Decisions: planEvaluator{}, Journal: j, DecisionBudget: time.Second, ConfirmationBudget: 50 * time.Millisecond,
+				Observe: func(ctx context.Context) (SemanticObservation, error) {
+					if first {
+						first = false
+						return SemanticObservation{Source: "turn", MatchID: "m", Phase: "turn", CapturedAt: time.Now(), Eligible: true}, nil
+					}
+					select {
+					case o := <-frames:
+						return o, nil
+					case <-ctx.Done():
+						return SemanticObservation{}, ctx.Err()
+					}
+				},
+				Execute: func(_ context.Context, _ Snapshot, _ rules.Action, _ time.Time) error {
+					at := time.Now()
+					err := j.ExecuteStep(Action{Kind: "click", Reference: "turn", X: 1, Y: 1}, func(a Action) error {
+						return a.onReceipt(InputReceipt{Outcome: "delivered", EventsSent: 2, DeliveredAt: at})
+					})
+					firstAt := at.Add(time.Nanosecond)
+					if tc.beforeDelivery {
+						firstAt = at.Add(-time.Nanosecond)
+					}
+					secondAt := at.Add(2 * time.Nanosecond)
+					frames <- SemanticObservation{Source: "result", MatchID: "m", Phase: "result", CapturedAt: secondAt, CalibrationID: "cal", Frames: []matchlog.FrameEvidence{{Source: "prior", MatchID: "m", CapturedAt: firstAt}, {Source: "result", MatchID: "m", CapturedAt: secondAt}}, Result: true, PartialResult: &stateestimate.OutcomeFacts{Finished: true, Winner: 1}}
+					if tc.beforeDelivery {
+						frames <- SemanticObservation{Source: "result2", MatchID: "m", Phase: "result", CapturedAt: at.Add(4 * time.Nanosecond), CalibrationID: "cal", Frames: []matchlog.FrameEvidence{{Source: "result", MatchID: "m", CapturedAt: secondAt}, {Source: "result2", MatchID: "m", CapturedAt: at.Add(4 * time.Nanosecond)}}, Result: true, PartialResult: &stateestimate.OutcomeFacts{Finished: true, Winner: 1}}
+					}
+					return err
+				}, Confirm: adapter.confirm, OnResult: func(SemanticObservation) { results++ }}
+			err := loop.Run(context.Background())
+			if err != nil || results != 1 || j.Pending() != nil || j.result == nil || *j.result != "loss" {
+				t.Fatalf("pass result: err=%v results=%d pending=%+v result=%v", err, results, j.Pending(), j.result)
+			}
+		})
+	}
 }
 
 func TestNativeSessionConfigTwoMatches(t *testing.T) {

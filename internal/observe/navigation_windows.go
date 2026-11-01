@@ -17,25 +17,19 @@ func navigatePlatform(out string, logger *log.Logger, n Navigation, m *PhaseMode
 	if filepath.Clean(n.StateDir) != filepath.Clean(filepath.Join(filepath.Dir(n.StopFile), "training-navigation-state")) {
 		return fmt.Errorf("navigation state must be the fixed training-navigation-state directory beside the stop file")
 	}
-	// Fixed-coordinate mode selection cannot be certified from an arbitrary local model.
-	// Do not send game input until a validated, pinned model and target run exist.
-	return fmt.Errorf("autonomous navigation disabled pending on-target model and input validation")
+	return navigationPrototype(out, logger, n, m)
 }
 
 func navigationPrototype(out string, logger *log.Logger, n Navigation, m *PhaseModel) error {
-	// Interlock location is fixed per interactive account, independent of output,
-	// stop-file and caller-chosen session directories.
-	root, err := os.UserConfigDir()
-	if err != nil {
-		return err
-	}
-	n.InterlockDir = filepath.Join(root, "GwentCoach", "training-navigation")
+	// Share the durable claim with training sessions and other input paths.
+	// An unresolved action must block navigation until reconciled.
+	n.InterlockDir = `D:\gwent-coach-training-local\training-autoplay-interlock`
 	capture := func() (navFrame, error) {
 		dir, e := os.MkdirTemp(out, "nav-frame-")
 		if e != nil {
 			return navFrame{}, e
 		}
-		if e = runSample(dir, logger, Sampling{MaxWidth: 960, JPEGQuality: 65}); e != nil {
+		if e = runSample(dir, logger, Sampling{}); e != nil {
 			return navFrame{}, e
 		}
 		paths, e := filepath.Glob(filepath.Join(dir, "*", "report.json"))
@@ -72,7 +66,7 @@ func navigationPrototype(out string, logger *log.Logger, n Navigation, m *PhaseM
 		if v.Width != 1920 || v.Height != 1080 {
 			return fmt.Errorf("unvalidated native geometry")
 		}
-		return Execute(out, logger, Action{Kind: "click", X: t.X * v.Width / 960, Y: t.Y * v.Height / 540, Reference: v.Reference, StopFile: n.StopFile, PhaseModel: n.ModelPath, ExpectedPhase: t.From, phaseModel: m})
+		return Execute(out, logger, Action{Kind: "click", X: t.X, Y: t.Y, Reference: v.Reference, StopFile: n.StopFile, PhaseModel: n.ModelPath, ExpectedPhase: t.From, phaseModel: m})
 	}
 	return runNavigation(n, capture, send, func() error { return stopped(n.StopFile) })
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -22,6 +23,7 @@ func main() {
 	interval := flag.Duration("interval", time.Second, "minimum interval between observation starts")
 	width := flag.Int("max-width", 0, "observation image maximum width; zero keeps native pixels")
 	quality := flag.Int("jpeg-quality", 0, "JPEG quality 1-100; zero uses PNG")
+	timings := flag.Bool("capture-timings", false, "include capture, encoding and image write timings in observation reports")
 	model := flag.String("phase-model", "", "local validated UI phase model")
 	modelSHA := flag.String("phase-model-sha256", "", "expected SHA-256 of phase model")
 	labels := flag.String("build-phases", "", "label manifest to compile into -phase-model")
@@ -38,13 +40,36 @@ func main() {
 	nativeLoop := flag.String("native-loop", "", "run calibrated Windows recognition, rules and input loop")
 	nativeSlice := flag.String("native-opening", "", "run one calibrated Windows training opening with a 10s budget")
 	navigate := flag.Bool("navigate-training", false, "bounded guarded navigation; never starts a match")
+	navigationPlan := flag.String("navigation-plan", "", "calibrated navigation plan JSON")
+	navigationPlanSHA := flag.String("navigation-plan-sha256", "", "expected SHA-256 of navigation plan")
 	training := flag.Bool("training-pass-only", false, "experimental local training game using a pass-only policy")
 	trainingState := flag.String("training-state", "", "new directory for the training attempt ledger")
 	trainingTimeout := flag.Duration("training-timeout", 10*time.Minute, "training attempt timeout")
 	resumePhase := flag.String("training-resume", "", "reconciled resume phase: mulligan or confirm")
 	state := flag.String("navigation-state", "", "new persistent session directory; never reuse after uncertain input")
 	steps := flag.Int("steps", 5, "navigation transition bound, 1..8")
+	inspectRecovery := flag.String("inspect-navigation-recovery", "", "inspect an events.jsonl file without modifying it or sending input")
+	claim := flag.String("inspect-navigation-claim", "", "optional navigation.claim path to inspect read-only")
 	flag.Parse()
+	if *timings && (*collect != "" || *nativeSession != "" || *nativeLoop != "" || *guardProbe != "" || *hoverAnnotate != "" || *nativeSlice != "" || *handScan != "" || *training || *navigate || *action != "") {
+		fmt.Fprintln(os.Stderr, "capture timings are available only for observation sampling")
+		os.Exit(1)
+	}
+	if *claim != "" && *inspectRecovery == "" {
+		fmt.Fprintln(os.Stderr, "claim inspection requires -inspect-navigation-recovery")
+		os.Exit(1)
+	}
+	if *inspectRecovery != "" {
+		report, err := observe.InspectNavigationRecovery(*inspectRecovery, *claim)
+		if err == nil {
+			err = json.NewEncoder(os.Stdout).Encode(report)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *ocrImage != "" {
 		text, err := observe.RecognizeText(*ocrImage, os.Stderr)
 		if err != nil {
@@ -158,9 +183,9 @@ func main() {
 	} else if *training {
 		runErr = observe.RunTraining(*out, logger, observe.Training{ModelPath: *model, ModelSHA256: *modelSHA, StopFile: *stopFile, StateDir: *trainingState, Timeout: *trainingTimeout, ResumePhase: *resumePhase})
 	} else if *navigate {
-		runErr = observe.Navigate(*out, logger, observe.Navigation{ModelPath: *model, ModelSHA256: *modelSHA, StopFile: *stopFile, StateDir: *state, Steps: *steps})
+		runErr = observe.Navigate(*out, logger, observe.Navigation{ModelPath: *model, ModelSHA256: *modelSHA, PlanPath: *navigationPlan, PlanSHA256: *navigationPlanSHA, StopFile: *stopFile, StateDir: *state, Steps: *steps})
 	} else if *action == "" {
-		runErr = observe.Sample(*out, logger, observe.Sampling{Count: *count, Interval: *interval, MaxWidth: *width, JPEGQuality: *quality, StopFile: *stopFile})
+		runErr = observe.Sample(*out, logger, observe.Sampling{Count: *count, Interval: *interval, MaxWidth: *width, JPEGQuality: *quality, StopFile: *stopFile, Timings: *timings})
 	} else {
 		runErr = observe.Execute(*out, logger, observe.Action{Kind: *action, X: *x, Y: *y, Reference: *reference, StopFile: *stopFile})
 	}

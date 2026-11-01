@@ -349,6 +349,9 @@ func importTraining(root string, item remoteItem, events []byte) error {
 	if err != nil {
 		return err
 	}
+	if err = matchlog.ValidateResultClaims(parsed); err != nil {
+		return err
+	}
 	if err = matchlog.ExportConfirmedTraining(filepath.Join(staging, "training.jsonl"), parsed); err != nil {
 		return err
 	}

@@ -119,7 +119,7 @@ func (a *nativeLoopAdapter) observeLocked(ctx context.Context) (SemanticObservat
 			}
 			pair[i] = evidence
 		}
-		o, e := SemanticFromEvidence(pair, time.Now(), 2*time.Second)
+		o, e := SemanticFromHandEvidence(pair, [2]HandFrame{{first.Reference, first.Captured, first.Image}, {second.Reference, second.Captured, second.Image}}, a.cfg.Hand, a.matcher, time.Now(), 2*time.Second)
 		if e != nil {
 			return SemanticObservation{}, e
 		}
@@ -223,7 +223,7 @@ func (a *nativeLoopAdapter) observeTarget(ctx context.Context, want PlannedInput
 		}
 	}
 	if expected != nil {
-		o, e := SemanticFromEvidence(pair, time.Now(), 2*time.Second)
+		o, e := SemanticFromHandEvidence(pair, [2]HandFrame{{frames[0].Reference, frames[0].Captured, frames[0].Image}, {frames[1].Reference, frames[1].Captured, frames[1].Image}}, a.cfg.Hand, a.matcher, time.Now(), 2*time.Second)
 		if e != nil {
 			return TargetEvidence{}, e
 		}

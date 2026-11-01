@@ -27,7 +27,7 @@ func RunReadOnlyCollection(out string, logger *log.Logger, configPath, stopFile 
 	}
 	cfg.Count = count
 	cfg.Interval = interval
-	if cfg.Count < 1 || cfg.Count > 100 || cfg.Interval < 100*time.Millisecond || len(cfg.Digits) == 0 {
+	if cfg.Count < 1 || cfg.Count > maxCollectionFrames || cfg.Interval < 100*time.Millisecond || len(cfg.Digits) == 0 {
 		return fmt.Errorf("bounded collection and at least one candidate calibration required")
 	}
 	dir, err := os.MkdirTemp(out, "readonly-collection-")

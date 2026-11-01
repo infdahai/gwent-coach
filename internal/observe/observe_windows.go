@@ -50,6 +50,18 @@ type report struct {
 	CapturedAt   string            `json:"captured_at,omitempty"`
 	DurationMS   float64           `json:"duration_ms"`
 	ImageSize    image.Point       `json:"image_size"`
+	Timings      *captureTimings   `json:"timings,omitempty"`
+}
+
+type captureTimings struct {
+	CaptureMS *float64 `json:"capture_ms,omitempty"`
+	EncodeMS  *float64 `json:"encode_ms,omitempty"`
+	WriteMS   *float64 `json:"write_ms,omitempty"`
+}
+
+func milliseconds(d time.Duration) *float64 {
+	ms := float64(d) / float64(time.Millisecond)
+	return &ms
 }
 
 func sessionID(pid uint32) (uint32, error) {
@@ -159,6 +171,9 @@ func runSample(out string, logger *log.Logger, sampling Sampling) (runErr error)
 		return err
 	}
 	rpt := report{Time: started.Format(time.RFC3339Nano), PID: uint32(os.Getpid())}
+	if sampling.Timings {
+		rpt.Timings = &captureTimings{}
+	}
 	defer func() {
 		if runErr != nil {
 			rpt.Error = runErr.Error()
@@ -215,7 +230,14 @@ func runSample(out string, logger *log.Logger, sampling Sampling) (runErr error)
 	if bounds.Right <= bounds.Left || bounds.Bottom <= bounds.Top {
 		return fmt.Errorf("invalid client rectangle: %+v", bounds)
 	}
+	var captureStarted time.Time
+	if sampling.Timings {
+		captureStarted = time.Now()
+	}
 	img, err := screenshot.Capture(int(bounds.Left), int(bounds.Top), int(bounds.Right-bounds.Left), int(bounds.Bottom-bounds.Top))
+	if sampling.Timings {
+		rpt.Timings.CaptureMS = milliseconds(time.Since(captureStarted))
+	}
 	if err != nil {
 		return fmt.Errorf("capture: %w", err)
 	}
@@ -236,7 +258,18 @@ func runSample(out string, logger *log.Logger, sampling Sampling) (runErr error)
 	if err != nil {
 		return err
 	}
-	size, encodeErr := encodeFrame(f, img, sampling)
+	var size image.Point
+	var encodeErr error
+	if sampling.Timings {
+		writer := &timedWriter{writer: f}
+		started := time.Now()
+		size, encodeErr = encodeFrame(writer, img, sampling)
+		elapsed := time.Since(started)
+		rpt.Timings.EncodeMS = milliseconds(elapsed - writer.duration)
+		rpt.Timings.WriteMS = milliseconds(writer.duration)
+	} else {
+		size, encodeErr = encodeFrame(f, img, sampling)
+	}
 	rpt.ImageSize = size
 	closeErr := f.Close()
 	if err := errors.Join(encodeErr, closeErr); err != nil {

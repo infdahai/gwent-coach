@@ -3,9 +3,11 @@ package observe
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"gwentcoachmvp/internal/matchlog"
+	"gwentcoachmvp/internal/uiphase"
 )
 
 type RecordedInputStep struct {
@@ -163,4 +165,97 @@ func RestoreActionJournal(writer durableEvents, events []matchlog.Event) (*Actio
 		}
 	}
 	return j, nil
+}
+
+// NavigationRecoveryReport inspects an immutable log and, optionally, the claim.
+// Evidence is advisory; neither a claim nor a ledger is modified.
+type NavigationRecoveryReport struct {
+	MatchID            string     `json:"match_id"`
+	Claim              string     `json:"claim"`
+	Status             string     `json:"status"`
+	ActionID           string     `json:"action_id,omitempty"`
+	Target             string     `json:"target,omitempty"`
+	DeliveredAt        *time.Time `json:"delivered_at,omitempty"`
+	Observations       int        `json:"post_delivery_observations"`
+	CandidateSequences []uint64   `json:"candidate_sequences,omitempty"`
+}
+
+func InspectNavigationRecovery(path, claim string) (NavigationRecoveryReport, error) {
+	report := NavigationRecoveryReport{Claim: "not inspected", Status: "no pending action"}
+	if claim != "" {
+		_, err := os.Lstat(claim)
+		if err == nil {
+			report.Claim = "present"
+		} else if os.IsNotExist(err) {
+			report.Claim = "absent"
+		} else {
+			return report, err
+		}
+	}
+	events, err := matchlog.Read(path)
+	if err != nil {
+		return report, err
+	}
+	if len(events) == 0 {
+		return report, fmt.Errorf("empty event stream")
+	}
+	report.MatchID = events[0].MatchID
+	journal, err := RestoreActionJournal(nil, events)
+	if err != nil {
+		return report, err
+	}
+	pending := journal.Pending()
+	if pending == nil {
+		return report, nil
+	}
+	report.ActionID = pending.ID
+	report.Status = "unresolved input delivery"
+	if pending.Domain != "navigation" {
+		report.Status = "pending non-navigation action"
+		return report, nil
+	}
+	var plan NavigationAction
+	if err := json.Unmarshal(pending.Action, &plan); err != nil {
+		return report, err
+	}
+	report.Target = plan.To
+	if !pending.DeliveryComplete {
+		return report, nil
+	}
+	at, err := journal.DeliveredAt(pending.ID)
+	if err != nil {
+		return report, err
+	}
+	report.DeliveredAt = &at
+	report.Status = "delivered, unconfirmed"
+	var deliverySequence uint64
+	for _, e := range events {
+		if e.EventType == "action_delivered" && e.ActionID == pending.ID {
+			deliverySequence = e.Sequence
+		}
+	}
+	for _, e := range events {
+		if e.Sequence <= deliverySequence || e.EventType != "ui_stage_observed" {
+			continue
+		}
+		report.Observations++
+		data, err := json.Marshal(e.VisibleState)
+		if err != nil {
+			return report, err
+		}
+		var observed uiphase.Event
+		if err = json.Unmarshal(data, &observed); err != nil {
+			return report, err
+		}
+		a, b := observed.Sources[0], observed.Sources[1]
+		frame := observed.Evidence.Frame
+		refs := []matchlog.FrameEvidence{{Source: a.ID, MatchID: a.StreamID, CapturedAt: a.CapturedAt}, {Source: b.ID, MatchID: b.StreamID, CapturedAt: b.CapturedAt}}
+		if observed.Confirmed && plan.To != "" && observed.Phase == plan.To && observed.Evidence.Phase == plan.To && e.Phase != nil && *e.Phase == plan.To && e.FramePath != nil && *e.FramePath == frame.ID && b.ID == frame.ID && b.StreamID == frame.StreamID && b.CapturedAt.Equal(frame.CapturedAt) && matchlog.ValidateConfirmation(report.MatchID, frame.ID, frame.CapturedAt, refs, at) == nil {
+			report.CandidateSequences = append(report.CandidateSequences, e.Sequence)
+		}
+	}
+	if len(report.CandidateSequences) > 0 {
+		report.Status = "delivered, recorded evidence requires review"
+	}
+	return report, nil
 }
