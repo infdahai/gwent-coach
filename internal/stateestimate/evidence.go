@@ -84,6 +84,7 @@ type Evidence struct {
 	CalibrationID string
 	Stage         string
 	Facts         Facts
+	Scalars       map[string]int
 	Targets       []Target
 }
 
@@ -97,6 +98,7 @@ type Observation struct {
 	CalibrationID, Stage, StateKey string
 	Facts                          Facts
 	FieldEvidence                  map[string]FieldEvidence
+	Scalars                        map[string]int
 	Targets                        []TargetObservation
 	View                           *rules.View
 	Eligible                       bool

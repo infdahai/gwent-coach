@@ -59,6 +59,13 @@ func Estimate(pair [2]Evidence, now time.Time, maxAge time.Duration) (Observatio
 			out.FieldEvidence[f.name] = provenance
 		}
 	}
+	out.Scalars = make(map[string]int)
+	for name, value := range b.Scalars {
+		if previous, ok := a.Scalars[name]; ok && previous == value {
+			out.Scalars[name] = value
+			out.FieldEvidence["scalar:"+name] = provenance
+		}
+	}
 	out.Targets = agreedTargets(a, b, provenance)
 	if out.Facts.Cards != nil {
 		for _, c := range out.Facts.Cards.Visible {

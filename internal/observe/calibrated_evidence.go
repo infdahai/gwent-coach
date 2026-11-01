@@ -35,6 +35,9 @@ type EvidenceCalibration struct {
 	Cards   *FactCalibration[stateestimate.CardsFacts]
 	Outcome *FactCalibration[stateestimate.OutcomeFacts]
 	Targets []*FactCalibration[stateestimate.Target]
+	// Scalars are independently labeled numeric regions (for example score or
+	// round counters), not OCR or implicit parts of a complete game view.
+	Scalars map[string]*FactCalibration[int]
 }
 
 // CalibratedEvidenceReader is an immutable, restricted labelled-template
@@ -66,6 +69,14 @@ func NewCalibratedEvidenceReader(cal EvidenceCalibration) (*CalibratedEvidenceRe
 			if (value.Kind != "control" && value.Kind != "hand-instance" && value.Kind != "row" && value.Kind != "board-target") || value.ID == "" || value.LayoutID == "" || value.Bounds.Empty() || !value.Bounds.In(image.Rect(0, 0, w, h)) {
 				return nil, fmt.Errorf("invalid target calibration")
 			}
+		}
+	}
+	for name, scalar := range cal.Scalars {
+		if name == "" || scalar == nil {
+			return nil, fmt.Errorf("invalid scalar calibration")
+		}
+		if err := validateFactCalibration(scalar, w, h); err != nil {
+			return nil, err
 		}
 	}
 	data, err := json.Marshal(cal)
@@ -175,5 +186,11 @@ func (r *CalibratedEvidenceReader) readFacts(frame stateestimate.FrameRef, img i
 			targets = append(targets, *target)
 		}
 	}
-	return stateestimate.Evidence{Frame: frame, CalibrationID: r.id, Stage: stage, Facts: facts, Targets: targets}
+	scalars := make(map[string]int)
+	for name, cal := range r.cal.Scalars {
+		if value := readFact(cal, img); value != nil {
+			scalars[name] = *value
+		}
+	}
+	return stateestimate.Evidence{Frame: frame, CalibrationID: r.id, Stage: stage, Facts: facts, Targets: targets, Scalars: scalars}
 }

@@ -9,6 +9,28 @@ import (
 	"gwentcoachmvp/internal/stateestimate"
 )
 
+func TestCalibratedScalarIndependentOfStage(t *testing.T) {
+	cal, frames := evidenceFixture()
+	cal.Totals = nil
+	cal.Scalars = map[string]*FactCalibration[int]{"opponent-score": evidenceFact([]image.Image{frames[0], frames[1]}, []string{"zero", "five"}, []int{0, 5}, 96)}
+	reader, err := NewCalibratedEvidenceReader(cal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int{0, 5} {
+		pair, now := readEvidencePair(t, reader, frames[i])
+		o, err := stateestimate.Estimate(pair, now, time.Second)
+		if err != nil || o.Stage != "turn" || o.View != nil || o.Scalars["opponent-score"] != want || !o.FieldEvidence["scalar:opponent-score"].Known {
+			t.Fatalf("scene %d: %+v %v", i, o, err)
+		}
+		delete(pair[1].Scalars, "opponent-score")
+		o, err = stateestimate.Estimate(pair, now, time.Second)
+		if err != nil || o.FieldEvidence["scalar:opponent-score"].Known {
+			t.Fatalf("missing scalar promoted: %+v %v", o, err)
+		}
+	}
+}
+
 func TestTargetEvidenceIndependentOfCompleteFacts(t *testing.T) {
 	cal, frames := evidenceFixture()
 	cal.Cards = nil
