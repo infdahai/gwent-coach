@@ -36,6 +36,11 @@ func BuildEvidence(manifestPath, out string) error {
 	if err != nil {
 		return err
 	}
+	keyDecoder := json.NewDecoder(bytes.NewReader(b))
+	keyDecoder.UseNumber()
+	if err := validateManifestKeys(keyDecoder, reflect.TypeOf(EvidenceBuildManifest{})); err != nil {
+		return fmt.Errorf("manifest: %w", err)
+	}
 	var spec EvidenceBuildManifest
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
@@ -100,6 +105,81 @@ func BuildEvidence(manifestPath, out string) error {
 		return writeErr
 	}
 	return closeErr
+}
+
+// Validate keys before decoding into maps or structs, which would otherwise
+// discard duplicates and accept case-insensitive aliases. Map keys are labels
+// and remain case-sensitive; raw fact values receive their typed check later.
+func validateManifestKeys(dec *json.Decoder, typ reflect.Type) error {
+	if typ == reflect.TypeOf(json.RawMessage{}) {
+		typ = nil
+	}
+	for typ != nil && typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	token, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	switch token {
+	case json.Delim('{'):
+		seen := make(map[string]bool)
+		for dec.More() {
+			key, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			name := key.(string)
+			if seen[name] {
+				return fmt.Errorf("duplicate key %q", name)
+			}
+			seen[name] = true
+			var child reflect.Type
+			if typ != nil && typ.Kind() == reflect.Struct {
+				for i := 0; i < typ.NumField(); i++ {
+					field := typ.Field(i)
+					if !field.IsExported() {
+						continue
+					}
+					fieldName := strings.Split(field.Tag.Get("json"), ",")[0]
+					if fieldName == "-" {
+						continue
+					}
+					if fieldName == "" {
+						fieldName = field.Name
+					}
+					if name == fieldName {
+						child = field.Type
+						break
+					}
+				}
+				if child == nil {
+					return fmt.Errorf("unknown or incorrectly cased field %q in %s", name, typ)
+				}
+			} else if typ != nil && typ.Kind() == reflect.Map {
+				child = typ.Elem()
+			}
+			if err := validateManifestKeys(dec, child); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+		}
+		_, err = dec.Token()
+		return err
+	case json.Delim('['):
+		var child reflect.Type
+		if typ != nil && (typ.Kind() == reflect.Array || typ.Kind() == reflect.Slice) {
+			child = typ.Elem()
+		}
+		for dec.More() {
+			if err := validateManifestKeys(dec, child); err != nil {
+				return err
+			}
+		}
+		_, err = dec.Token()
+		return err
+	default:
+		return nil
+	}
 }
 
 func buildEvidenceGroup[T any](base string, group *EvidenceBuildGroup) (*FactCalibration[T], error) {

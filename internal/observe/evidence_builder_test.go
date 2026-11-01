@@ -1,6 +1,7 @@
 package observe
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +9,8 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"gwentcoachmvp/internal/stateestimate"
@@ -117,6 +120,43 @@ func TestBuildEvidence(t *testing.T) {
 	after, _ := os.ReadFile(output)
 	if string(original) != string(after) {
 		t.Fatal("existing output changed")
+	}
+}
+
+func TestManifestKeys(t *testing.T) {
+	cases := []struct{ name, input, want string }{
+		{"root duplicate", `{"Round":null,"Round":null}`, "duplicate key"},
+		{"root alias", `{"Round":null,"round":null}`, "incorrectly cased"},
+		{"group alias", `{"Round":{"Values":{},"values":{}}}`, "incorrectly cased"},
+		{"duplicate label", `{"Round":{"Values":{"one":1,"one":2}}}`, "duplicate key"},
+		{"escaped duplicate label", `{"Round":{"Values":{"one":1,"one":2}}}`, "duplicate key"},
+		{"rgb alias", `{"Round":{"RequiredRGB":[{"ROI":{},"roi":{}}]}}`, "incorrectly cased"},
+		{"rectangle alias", `{"Round":{"RequiredRGB":[{"ROI":{"Min":{"X":1,"x":2}}}]}}`, "incorrectly cased"},
+		{"raw value duplicate", `{"Round":{"Values":{"one":{"Round":1,"Round":2}}}}`, "duplicate key"},
+		{"distinct labels", `{"Round":{"Values":{"one":1,"One":2}}}`, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dec := json.NewDecoder(bytes.NewBufferString(tc.input))
+			err := validateManifestKeys(dec, reflect.TypeOf(EvidenceBuildManifest{}))
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("got %v, want %q", err, tc.want)
+			}
+			if tc.want != "" {
+				dir := t.TempDir()
+				manifest := filepath.Join(dir, "manifest.json")
+				out := filepath.Join(dir, "output.json")
+				if err := os.WriteFile(manifest, []byte(tc.input), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := BuildEvidence(manifest, out); err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("builder: %v", err)
+				}
+				if _, err := os.Stat(out); !os.IsNotExist(err) {
+					t.Fatal("invalid manifest created output")
+				}
+			}
+		})
 	}
 }
 
