@@ -43,11 +43,11 @@ func importCollections(source, dest string, out io.Writer) error {
 	if within(source, dest) || within(dest, source) {
 		return fmt.Errorf("source and destination must be separate directories")
 	}
-	lock := filepath.Join(dest, ".collection-import-lock")
-	if err := os.Mkdir(lock, 0700); err != nil {
+	unlock, err := acquireImportLock(dest)
+	if err != nil {
 		return fmt.Errorf("acquire import lock: %w", err)
 	}
-	defer os.Remove(lock)
+	defer unlock()
 	entries, err := os.ReadDir(source)
 	if err != nil {
 		return err
