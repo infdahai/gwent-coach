@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -44,7 +45,24 @@ func main() {
 	resumePhase := flag.String("training-resume", "", "reconciled resume phase: mulligan or confirm")
 	state := flag.String("navigation-state", "", "new persistent session directory; never reuse after uncertain input")
 	steps := flag.Int("steps", 5, "navigation transition bound, 1..8")
+	inspectRecovery := flag.String("inspect-navigation-recovery", "", "inspect an events.jsonl file without modifying it or sending input")
+	claim := flag.String("inspect-navigation-claim", "", "optional navigation.claim path to inspect read-only")
 	flag.Parse()
+	if *claim != "" && *inspectRecovery == "" {
+		fmt.Fprintln(os.Stderr, "claim inspection requires -inspect-navigation-recovery")
+		os.Exit(1)
+	}
+	if *inspectRecovery != "" {
+		report, err := observe.InspectNavigationRecovery(*inspectRecovery, *claim)
+		if err == nil {
+			err = json.NewEncoder(os.Stdout).Encode(report)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *ocrImage != "" {
 		text, err := observe.RecognizeText(*ocrImage, os.Stderr)
 		if err != nil {
