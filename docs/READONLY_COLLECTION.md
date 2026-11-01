@@ -11,20 +11,20 @@ New-Item -ItemType Directory -Force .\bin | Out-Null
 go build -o .\bin\coach.exe ./cmd/coach
 ```
 
-Save the following as `collector.json`. This example was calibrated against a small set of 1920×1080 frames and contains templates only for 0 and 1. Its coordinates and thresholds may not match another window, resolution, UI or game state. Area-based matching changes the distance scale: calibrations created for the former point sampler must be recalibrated. The example has only four labeled historical frames and cannot reliably reject all other digits.
+Save the following as `collector.json`. This example was calibrated against a small set of 1920×1080 frames and contains templates only for 0 and 1. Its coordinates and thresholds may not match another window, resolution, UI or game state. Area-based matching changes the distance scale: calibrations created for the former point sampler must be recalibrated and declare `"Method": "area-v1"`. The collector rejects configurations without this marker. The example has only four labeled historical frames and cannot reliably reject all other digits.
 
 ```json
 {
   "Digits": {
     "opponent_score": {
       "ROI": {"Min": {"X": 1815, "Y": 345}, "Max": {"X": 1875, "Y": 400}},
-      "Threshold": 140, "CandidateOnly": true,
+      "Threshold": 140, "CandidateOnly": true, "Method": "area-v1",
       "Width": 5, "Height": 7, "MaxDigits": 2, "MaxDistance": 9, "MinGap": 4,
       "Templates": {"0": ["01110110111100111001110011101101110"], "1": ["00111000110001100011000110001100011", "01111001110011100111001110011100000"]}
     },
     "own_score": {
       "ROI": {"Min": {"X": 1815, "Y": 675}, "Max": {"X": 1875, "Y": 730}},
-      "Threshold": 140, "CandidateOnly": true,
+      "Threshold": 140, "CandidateOnly": true, "Method": "area-v1",
       "Width": 5, "Height": 7, "MaxDigits": 2, "MaxDistance": 9, "MinGap": 4,
       "Templates": {"0": ["01110110111100111001110011101101110"], "1": ["00111000110001100011000110001100011", "01111001110011100111001110011100000"]}
     }

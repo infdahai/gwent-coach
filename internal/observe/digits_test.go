@@ -14,7 +14,7 @@ import (
 )
 
 func scoreDigits(roi image.Rectangle) DigitCalibration {
-	return DigitCalibration{CandidateOnly: true, ROI: roi, Threshold: 140, Width: 5, Height: 7, MaxDigits: 2, MaxDistance: 9, MinGap: 4, Templates: map[int][]string{0: {"01110110111100111001110011101101110"}, 1: {"00111000110001100011000110001100011", "01111001110011100111001110011100000"}}}
+	return DigitCalibration{Method: "area-v1", CandidateOnly: true, ROI: roi, Threshold: 140, Width: 5, Height: 7, MaxDigits: 2, MaxDistance: 9, MinGap: 4, Templates: map[int][]string{0: {"01110110111100111001110011101101110"}, 1: {"00111000110001100011000110001100011", "01111001110011100111001110011100000"}}}
 }
 func loadRealFrame(t testing.TB, name string) image.Image {
 	t.Helper()
@@ -77,7 +77,7 @@ func syntheticGlyph(mask string, scale int) *image.Gray {
 func TestDigitsFullCoverageAndUnknowns(t *testing.T) {
 	zero := "01110100011000110001100011000101110"
 	one := "00100011000010000100001000010011111"
-	c := DigitCalibration{CandidateOnly: true, ROI: image.Rect(0, 0, 50, 70), Threshold: 140, Width: 5, Height: 7, MaxDigits: 1, MaxDistance: 2, MinGap: 4, Templates: map[int][]string{0: {zero}, 1: {one}}}
+	c := DigitCalibration{Method: "area-v1", CandidateOnly: true, ROI: image.Rect(0, 0, 50, 70), Threshold: 140, Width: 5, Height: 7, MaxDigits: 1, MaxDistance: 2, MinGap: 4, Templates: map[int][]string{0: {zero}, 1: {one}}}
 	for _, tc := range []struct {
 		mask string
 		want int

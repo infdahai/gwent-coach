@@ -42,6 +42,9 @@ func CollectReadOnly(ctx context.Context, cfg CollectionConfig, capture func(con
 		if name == "" || !cfg.Digits[name].CandidateOnly {
 			return fmt.Errorf("digit name and explicit candidate-only calibration required")
 		}
+		if cfg.Digits[name].Method != "area-v1" {
+			return fmt.Errorf("digit %q: calibration requires Method area-v1 and recalibrated templates", name)
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)

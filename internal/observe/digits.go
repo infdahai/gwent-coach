@@ -8,6 +8,8 @@ import (
 // DigitCalibration binds a numeric ROI to foreground brightness and glyph
 // templates. Templates are row-major binary masks of equal dimensions.
 type DigitCalibration struct {
+	// Method identifies the matching algorithm used to calibrate templates and thresholds.
+	Method        string
 	ROI           image.Rectangle
 	Threshold     uint8
 	Width, Height int
@@ -21,6 +23,9 @@ type DigitCalibration struct {
 }
 
 func (c DigitCalibration) validate(bounds image.Rectangle) error {
+	if c.Method != "area-v1" {
+		return fmt.Errorf("digit calibration requires Method area-v1 and recalibrated templates")
+	}
 	if c.ROI.Empty() || !c.ROI.In(bounds) || c.Width < 1 || c.Height < 1 || c.Width*c.Height > 64 || c.MaxDigits < 1 || c.MaxDigits > 9 || c.MaxDistance < 0 || c.MaxDistance >= c.Width*c.Height || c.MinGap < 1 || len(c.Templates) < 2 {
 		return fmt.Errorf("invalid digit calibration")
 	}
