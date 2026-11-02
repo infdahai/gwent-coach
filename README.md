@@ -27,4 +27,6 @@ See [offline decision prototype](docs/DECISIONS.md) for the public-view decision
 
 See [persistent card/effect lookup and image candidates](docs/CARD_LOOKUP.md) for the local database, explicit art-ROI matcher, CLI commands, integration APIs, and measured costs. Image results remain unvalidated candidates.
 
+See [Windows resident control](docs/WINDOWS_CONTROL.md) for one interactive host, authenticated SSH-forwarded capture/click/session commands, durable stop and request receipts.
+
 No screenshots, run archives or local machine notes are included in the public repository.

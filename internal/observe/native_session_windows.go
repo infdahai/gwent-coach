@@ -30,8 +30,16 @@ type windowsSessionHost struct {
 }
 
 func RunNativeSession(out string, logger *log.Logger, path string, output io.Writer) error {
-	return RunSessionConfig(context.Background(), path, func(cfg NativeSessionConfig) (SessionHost, error) {
-		if err := runNativeLoopAttempt(context.Background(), out, logger, cfg.LoopConfig, output, nil, &nativeLoopBinding{MatchID: cfg.ID + "/preflight", Preflight: true}); err != nil {
+	return RunNativeSessionContext(context.Background(), out, logger, path, output)
+}
+
+// RunNativeSessionContext keeps cancellation attached through preflight and input.
+func RunNativeSessionContext(ctx context.Context, out string, logger *log.Logger, path string, output io.Writer) error {
+	return RunSessionConfig(ctx, path, func(cfg NativeSessionConfig) (SessionHost, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := runNativeLoopAttempt(ctx, out, logger, cfg.LoopConfig, output, nil, &nativeLoopBinding{MatchID: cfg.ID + "/preflight", Preflight: true}); err != nil {
 			return nil, err
 		}
 		data, err := os.ReadFile(cfg.LoopConfig)
@@ -63,6 +71,9 @@ func RunNativeSession(out string, logger *log.Logger, path string, output io.Wri
 					return nil, fmt.Errorf("session transition lacks calibrated phase or coordinates")
 				}
 			}
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		if err = acquireInterlock(`D:\gwent-coach-training-local\training-autoplay-interlock`); err != nil {
 			return nil, err
@@ -96,7 +107,7 @@ func (h *windowsSessionHost) ExecuteInput(ctx context.Context, action Action) er
 	action.PhaseModel = h.loop.ModelPath
 	action.phaseModel = h.model
 	action.deadline, _ = ctx.Deadline()
-	return Execute(h.out, h.logger, action)
+	return ExecuteContext(ctx, h.out, h.logger, action)
 }
 
 func (h *windowsSessionHost) RunMatch(ctx context.Context, id string, journal *ActionJournal) (SemanticObservation, error) {
