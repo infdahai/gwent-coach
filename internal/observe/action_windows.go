@@ -214,7 +214,21 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 			return fmt.Errorf("SetCursorPos: %w", err)
 		}
 		receipt = InputReceipt{Outcome: "cursor_moved", DeliveredAt: time.Now()}
-		time.Sleep(100 * time.Millisecond)
+		if a.imageGuard != nil {
+			// Observed hand identity is calibrated on settled, expanded art.
+			// Keep the original input deadline throughout the hover animation.
+			settled := time.Now().Add(900 * time.Millisecond)
+			for time.Now().Before(settled) {
+				if _, err := actionWindow(a, ref); err != nil {
+					return err
+				}
+				if remaining := time.Until(settled); remaining > 0 {
+					time.Sleep(min(50*time.Millisecond, remaining))
+				}
+			}
+		} else {
+			time.Sleep(100 * time.Millisecond)
+		}
 		if _, err := actionWindow(a, ref); err != nil {
 			return err
 		}
