@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -30,8 +29,9 @@ type windowsSessionHost struct {
 }
 
 func RunNativeSession(out string, logger *log.Logger, path string, output io.Writer) error {
-	return RunSessionConfig(context.Background(), path, func(cfg NativeSessionConfig) (SessionHost, error) {
-		if err := runNativeLoopAttempt(context.Background(), out, logger, cfg.LoopConfig, output, nil, &nativeLoopBinding{MatchID: cfg.ID + "/preflight", Preflight: true}); err != nil {
+	return runSessionConfig(context.Background(), path, func(session *validatedSession) (SessionHost, error) {
+		cfg, profile, loop, model := session.cfg, session.profile, session.loop, session.model
+		if err := runNativeLoopAttempt(context.Background(), out, logger, cfg.LoopConfig, output, nil, &nativeLoopBinding{MatchID: cfg.ID + "/preflight", Preflight: true, Profile: profile}); err != nil {
 			return nil, err
 		}
 		data, err := os.ReadFile(cfg.LoopConfig)
@@ -42,32 +42,10 @@ func RunNativeSession(out string, logger *log.Logger, path string, output io.Wri
 		if !strings.EqualFold(hex.EncodeToString(sum[:]), cfg.LoopConfigSHA256) {
 			return nil, fmt.Errorf("loop profile changed during preflight")
 		}
-		var loop NativeLoopConfig
-		if err = json.Unmarshal(data, &loop); err != nil {
-			return nil, err
-		}
-		if !filepath.IsAbs(loop.ModelPath) {
-			loop.ModelPath = filepath.Join(filepath.Dir(cfg.LoopConfig), loop.ModelPath)
-		}
-		model, err := loadBoundPhases(loop.ModelPath, loop.ModelSHA256)
-		if err != nil {
-			return nil, err
-		}
-		names := map[string]bool{}
-		for _, p := range model.Phases {
-			names[p.Name] = true
-		}
-		for _, path := range [][]SessionTransition{cfg.Bootstrap, cfg.Entry, cfg.Exit} {
-			for _, t := range path {
-				if !names[t.From] || !names[t.To] || t.Input.X <= 0 || t.Input.X >= 1920 || t.Input.Y <= 0 || t.Input.Y >= 1080 {
-					return nil, fmt.Errorf("session transition lacks calibrated phase or coordinates")
-				}
-			}
-		}
 		if err = acquireInterlock(`D:\gwent-coach-training-local\training-autoplay-interlock`); err != nil {
 			return nil, err
 		}
-		return &windowsSessionHost{cfg: cfg, profile: data, loop: loop, out: out, logger: logger, output: output, model: model}, nil
+		return &windowsSessionHost{cfg: cfg, profile: profile, loop: loop, out: out, logger: logger, output: output, model: model}, nil
 	})
 }
 

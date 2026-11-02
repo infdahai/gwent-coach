@@ -46,6 +46,20 @@ Minimal session configuration (paths are relative to this file; provide an actua
 
 The loop profile supplies the pinned phase/evidence models, catalog and execution geometry. All navigation phases must be in its model; the host validates assets before input. The session supplies match IDs and the durable journal. `ResumeFirst: true` resumes an unfinished match directory at `StartMatch`; completed or torn logs are rejected. A results-to-rewards or other route must be explicitly calibrated in `Exit` instead of assuming the direct transition above. These example coordinates describe a previously measured layout and are not general calibration.
 
+## Portable session preflight
+
+Before transferring a session to Windows, run this standalone mode on macOS or another Go host:
+
+```sh
+coach -preflight-session session.json
+```
+
+It prints one JSON report with `ok`, the session ID, resolved loop/model paths, both SHA-256 pins, sorted phases used and Bootstrap/Entry/Exit transition counts. On failure the report has `ok: false` and an `error`, the error is also written to stderr, and the process exits nonzero. Use this mode alone, without other flags or positional arguments. Session paths resolve relative to the session JSON; the phase-model path resolves relative to the loop profile.
+
+Preflight checks required session fields, the loop-profile hash, the pinned phase model, connected navigation paths, phase names and click bounds (`0 < x < 1920`, `0 < y < 1080`). It rejects legacy/static scenario states and loop-profile recovery settings using the same rules as the session runner. Session-owned `ResumeFirst` remains supported. It sends no input, acquires no interlock, creates no output or state directory, and uses no Windows APIs.
+
+This is configuration and phase-model validation only. Full loop assets (including evidence calibration, card catalog, hand templates/database and other loop settings) still require the Windows runner's checks. Preflight does not verify the live window/session, recognizer accuracy, or game behavior; a successful report does not qualify a live run.
+
 ## Acceptance baseline
 
 The eventual start boundary is the verified in-game Training / versus-computer screen with a fully audited, owned deck selected. Each trial starts before the program initiates matchmaking and ends only after a recognized result and either verified GG or evidence that the training mode does not offer GG. Navigation, mulligan, card play, target selection, turn transitions and result handling must require no operator input. Online seasonal matchmaking is outside this task.

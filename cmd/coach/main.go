@@ -36,6 +36,7 @@ func main() {
 	guardProbe := flag.String("guard-probe", "", "capture guarded cursor transition without mouse button input")
 	hoverAnnotate := flag.String("annotate-hand", "", "bounded Windows hover/OCR pass with calibrated slot regions")
 	collect := flag.String("collect-readonly", "", "bounded Windows capture and numeric recognition config; never sends input")
+	preflightSession := flag.String("preflight-session", "", "validate a pinned session configuration and phase model without input or file creation")
 	nativeSession := flag.String("native-session", "", "run a pinned Windows multi-match session and export confirmed training samples")
 	nativeLoop := flag.String("native-loop", "", "run calibrated Windows recognition, rules and input loop")
 	nativeSlice := flag.String("native-opening", "", "run one calibrated Windows training opening with a 10s budget")
@@ -51,6 +52,34 @@ func main() {
 	inspectRecovery := flag.String("inspect-navigation-recovery", "", "inspect an events.jsonl file without modifying it or sending input")
 	claim := flag.String("inspect-navigation-claim", "", "optional navigation.claim path to inspect read-only")
 	flag.Parse()
+	var preflightRequested, conflicting bool
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "preflight-session" {
+			preflightRequested = true
+		} else {
+			conflicting = true
+		}
+	})
+	if preflightRequested {
+		if conflicting || flag.NArg() != 0 {
+			fmt.Fprintln(os.Stderr, "-preflight-session must be used alone, without other flags or positional arguments")
+			os.Exit(1)
+		}
+		report, err := observe.PreflightSessionConfig(*preflightSession)
+		if err != nil {
+			report.Error = err.Error()
+			if encodeErr := json.NewEncoder(os.Stdout).Encode(report); encodeErr != nil {
+				fmt.Fprintln(os.Stderr, encodeErr)
+			}
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err = json.NewEncoder(os.Stdout).Encode(report); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *timings && (*collect != "" || *nativeSession != "" || *nativeLoop != "" || *guardProbe != "" || *hoverAnnotate != "" || *nativeSlice != "" || *handScan != "" || *training || *navigate || *action != "") {
 		fmt.Fprintln(os.Stderr, "capture timings are available only for observation sampling")
 		os.Exit(1)

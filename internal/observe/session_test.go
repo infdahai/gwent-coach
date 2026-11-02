@@ -291,7 +291,19 @@ func TestNativeSessionConfigTwoMatches(t *testing.T) {
 			err := loop.Run(ctx)
 			return result, err
 		}}
-	profile := []byte(`{}`)
+	modelData, err := json.Marshal(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelPath := filepath.Join(root, "model.json")
+	if err = os.WriteFile(modelPath, modelData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	modelSum := sha256.Sum256(modelData)
+	profile, err := json.Marshal(NativeLoopConfig{ModelPath: modelPath, ModelSHA256: hex.EncodeToString(modelSum[:])})
+	if err != nil {
+		t.Fatal(err)
+	}
 	profilePath := filepath.Join(root, "loop.json")
 	if err = os.WriteFile(profilePath, profile, 0600); err != nil {
 		t.Fatal(err)
