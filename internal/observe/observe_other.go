@@ -3,6 +3,7 @@
 package observe
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -31,6 +32,10 @@ func RunHoverAnnotation(_ string, _ *log.Logger, _ string, _ io.Writer) error {
 	return fmt.Errorf("hover annotation requires Windows interactive desktop")
 }
 
+func RunNativeSessionContext(_ context.Context, _ string, _ *log.Logger, _ string, _ io.Writer) error {
+	return fmt.Errorf("native session requires Windows interactive desktop")
+}
+
 func RunNativeSession(_ string, _ *log.Logger, _ string, _ io.Writer) error {
 	return fmt.Errorf("native session requires Windows interactive desktop")
 }
@@ -53,6 +58,10 @@ func RunHandScan(_ string, _ *log.Logger, _, _ string, _ int, _ time.Duration, _
 
 func RunTraining(_ string, _ *log.Logger, _ Training) error {
 	return fmt.Errorf("training requires Windows interactive desktop")
+}
+
+func ExecuteContext(_ context.Context, _ string, _ *log.Logger, _ Action) error {
+	return fmt.Errorf("input requires Windows interactive desktop")
 }
 
 func Execute(_ string, _ *log.Logger, _ Action) error {

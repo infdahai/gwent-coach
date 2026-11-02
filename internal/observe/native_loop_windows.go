@@ -260,14 +260,14 @@ func runNativeLoopAttempt(ctx context.Context, out string, logger *log.Logger, c
 		if err := json.NewEncoder(events).Encode(map[string]any{"status": "intent", "kind": kind, "reference": f.Reference, "time": started.UTC()}); err != nil {
 			return err
 		}
-		err := journal.ExecuteStep(Action{Kind: kind, X: p.X, Y: p.Y, Reference: f.Reference, StopFile: cfg.StopFile, PhaseModel: cfg.ModelPath, ExpectedPhase: f.Phase, phaseModel: model, deadline: deadline, primitiveOnly: true}, func(action Action) error { return Execute(out, logger, action) })
+		err := journal.ExecuteStep(Action{Kind: kind, X: p.X, Y: p.Y, Reference: f.Reference, StopFile: cfg.StopFile, PhaseModel: cfg.ModelPath, ExpectedPhase: f.Phase, phaseModel: model, deadline: deadline, primitiveOnly: true}, func(action Action) error { return ExecuteContext(ctx, out, logger, action) })
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(events).Encode(map[string]any{"status": "delivered_unconfirmed", "kind": kind, "duration_ms": float64(time.Since(started)) / float64(time.Millisecond)})
 	}
 	if !skipInitial && cfg.StartNeutralPoint != (image.Point{}) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		frame, err := capture(ctx)
 		if err == nil {
 			err = send(ctx, frame, "hover", cfg.StartNeutralPoint, time.Now().Add(8*time.Second))
@@ -316,18 +316,18 @@ func runNativeLoopAttempt(ctx context.Context, out string, logger *log.Logger, c
 		}
 	}
 	if !skipInitial && !cfg.MulliganOnTransition {
-		if err := adapter.finishMulligan(context.Background()); err != nil {
+		if err := adapter.finishMulligan(ctx); err != nil {
 			return err
 		}
 	}
 	if !skipInitial {
-		if err := adapter.resumeSelected(context.Background(), service); err != nil {
+		if err := adapter.resumeSelected(ctx, service); err != nil {
 			return err
 		}
-		if err := adapter.resumeOrderSelected(context.Background(), service); err != nil {
+		if err := adapter.resumeOrderSelected(ctx, service); err != nil {
 			return err
 		}
-		if err := adapter.resumeMageTarget(context.Background(), service); err != nil {
+		if err := adapter.resumeMageTarget(ctx, service); err != nil {
 			return err
 		}
 	}

@@ -1,6 +1,7 @@
 package observe
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -23,6 +24,7 @@ type Action struct {
 	PhaseModel    string `json:"phase_model,omitempty"`
 	ExpectedPhase string `json:"expected_phase,omitempty"`
 	phaseModel    *PhaseModel
+	ctx           context.Context
 	deadline      time.Time
 	guardProbe    bool
 	primitiveOnly bool

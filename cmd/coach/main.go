@@ -13,6 +13,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "control" {
+		if err := runControl(os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	out := flag.String("out", "runs", "directory for timestamped observation reports")
 	action := flag.String("action", "", "single reviewed input: click, hold (1.5s), hover, or escape (default observe only)")
 	x := flag.Int("x", 0, "click x in client pixels")

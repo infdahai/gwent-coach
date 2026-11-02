@@ -3,6 +3,7 @@
 package observe
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,12 @@ func stopped(path string) error {
 }
 
 func actionWindow(a Action, ref report) (gameWindow, error) {
+	if a.ctx != nil && a.ctx.Err() != nil {
+		return gameWindow{}, a.ctx.Err()
+	}
+	if !a.deadline.IsZero() && !time.Now().Before(a.deadline) {
+		return gameWindow{}, fmt.Errorf("input deadline expired")
+	}
 	if err := stopped(a.StopFile); err != nil {
 		return gameWindow{}, err
 	}
@@ -83,6 +90,13 @@ func actionWindow(a Action, ref report) (gameWindow, error) {
 	return gameWindow{}, fmt.Errorf("game focus, process, or layout changed; input refused")
 }
 
+// ExecuteContext checks cancellation at each input guard. A held button is still
+// released on cancellation; cleanup release is not another gameplay action.
+func ExecuteContext(ctx context.Context, out string, logger *log.Logger, a Action) error {
+	a.ctx = ctx
+	return Execute(out, logger, a)
+}
+
 func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 	receipt := InputReceipt{Outcome: "not_sent"}
 	published := false
@@ -98,6 +112,9 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 			runErr = errors.Join(runErr, publish())
 		}
 	}()
+	if a.ctx != nil && a.ctx.Err() != nil {
+		return a.ctx.Err()
+	}
 	if err := a.Validate(); err != nil {
 		return err
 	}
@@ -297,6 +314,9 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 		if root != w.Handle {
 			return fmt.Errorf("target covered before delivery")
 		}
+	}
+	if a.ctx != nil && a.ctx.Err() != nil {
+		return a.ctx.Err()
 	}
 	if !a.deadline.IsZero() && !time.Now().Before(a.deadline) {
 		return fmt.Errorf("input deadline expired before delivery")
