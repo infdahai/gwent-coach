@@ -261,6 +261,17 @@ func Execute(out string, logger *log.Logger, a Action) (runErr error) {
 			return err
 		}
 		phase, scores := model.Recognize(fresh)
+		if a.extraPhaseModel != nil {
+			extra, _ := a.extraPhaseModel.Recognize(fresh)
+			if extra != a.extraExpectedPhase {
+				return fmt.Errorf("additional semantic input guard rejected phase %q", extra)
+			}
+		}
+		if a.imageGuard != nil {
+			if err := a.imageGuard(fresh); err != nil {
+				return err
+			}
+		}
 		if a.guardProbe || phase != a.ExpectedPhase {
 			path := filepath.Join(dir, "phase-guard.png")
 			f, saveErr := os.Create(path)
