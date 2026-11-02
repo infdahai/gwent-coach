@@ -193,6 +193,15 @@ type mouseInput struct {
 // Click assumes the caller has durably claimed the reference before calling.
 // Even cursor motion consumes a reference; partial delivery must never be replayed.
 func Click(ctx context.Context, ref Capture, x, y int, stopFile string) (Receipt, error) {
+	return pointerInput(ctx, ref, x, y, stopFile, false)
+}
+
+// Hold shares Click's reference and pointer guards, with a fixed 1.5s press.
+func Hold(ctx context.Context, ref Capture, x, y int, stopFile string) (Receipt, error) {
+	return pointerInput(ctx, ref, x, y, stopFile, true)
+}
+
+func pointerInput(ctx context.Context, ref Capture, x, y int, stopFile string, hold bool) (Receipt, error) {
 	receipt := Receipt{Outcome: "not_sent"}
 	done, err := dpiThread()
 	if err != nil {
@@ -217,27 +226,46 @@ func Click(ctx context.Context, ref Capture, x, y int, stopFile string) (Receipt
 		return receipt, ctx.Err()
 	case <-time.After(100 * time.Millisecond):
 	}
-	if err = guard(ctx, ref, x, y, stopFile); err != nil {
+	checkPointer := func() error {
+		if err := guard(ctx, ref, x, y, stopFile); err != nil {
+			return err
+		}
+		var cursor point
+		r, _, err := user32.NewProc("GetCursorPos").Call(uintptr(unsafe.Pointer(&cursor)))
+		if r == 0 {
+			return fmt.Errorf("GetCursorPos: %w", err)
+		}
+		if cursor.X != px || cursor.Y != py {
+			return fmt.Errorf("cursor moved")
+		}
+		target, _, _ := user32.NewProc("WindowFromPoint").Call(uintptr(uint64(uint32(px)) | uint64(uint32(py))<<32))
+		root, _, _ := user32.NewProc("GetAncestor").Call(target, 2)
+		if root != ref.Window.Handle {
+			return fmt.Errorf("target covered by another window")
+		}
+		return nil
+	}
+	if err = checkPointer(); err != nil {
 		return receipt, err
-	}
-	var cursor point
-	r, _, err = user32.NewProc("GetCursorPos").Call(uintptr(unsafe.Pointer(&cursor)))
-	if r == 0 {
-		return receipt, fmt.Errorf("GetCursorPos: %w", err)
-	}
-	if cursor.X != px || cursor.Y != py {
-		return receipt, fmt.Errorf("cursor moved")
-	}
-	target, _, _ := user32.NewProc("WindowFromPoint").Call(uintptr(uint64(uint32(px)) | uint64(uint32(py))<<32))
-	root, _, _ := user32.NewProc("GetAncestor").Call(target, 2)
-	if root != ref.Window.Handle {
-		return receipt, fmt.Errorf("target covered by another window")
 	}
 	var inputs [2]nativeInput
 	(*mouseInput)(unsafe.Pointer(&inputs[0].Data[0])).Flags = 0x0002
 	(*mouseInput)(unsafe.Pointer(&inputs[1].Data[0])).Flags = 0x0004
 	if err = guard(ctx, ref, x, y, stopFile); err != nil {
 		return receipt, err
+	}
+	if hold {
+		return deliverHold(ctx, checkPointer, func(down bool) (uint32, error) {
+			i := 1
+			if down {
+				i = 0
+			}
+			n, _, sendErr := user32.NewProc("SendInput").Call(1, uintptr(unsafe.Pointer(&inputs[i])), unsafe.Sizeof(inputs[i]))
+			if n != 1 {
+				return uint32(n), fmt.Errorf("SendInput sent %d/1 events; do not replay: %v", n, sendErr)
+			}
+			return uint32(n), nil
+		})
 	}
 	n, _, sendErr := user32.NewProc("SendInput").Call(2, uintptr(unsafe.Pointer(&inputs[0])), unsafe.Sizeof(inputs[0]))
 	receipt.EventsSent = uint32(n)

@@ -23,7 +23,7 @@ import (
 
 func runControl(args []string, output, diagnostics io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: coach control <host|status|capture|click|run-session|stop|receipt|logs|shutdown> [flags]")
+		return fmt.Errorf("usage: coach control <host|status|capture|click|hold|run-session|stop|receipt|logs|shutdown> [flags]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet("control "+command, flag.ContinueOnError)
@@ -35,11 +35,11 @@ func runControl(args []string, output, diagnostics io.Writer) error {
 	stop := flags.String("stop-file", "", "host durable stop latch; must match configured session StopFile")
 	profile := flags.String("session-config", "", "host-only pinned native session configuration")
 	id := flags.String("id", "", "unique command ID, or existing receipt/log ID")
-	reference := flags.String("reference", "", "server capture ID for click")
+	reference := flags.String("reference", "", "server capture ID for click or hold")
 	x := flags.Int("x", -1, "client pixel x")
 	y := flags.Int("y", -1, "client pixel y")
 	imagePath := flags.String("image", "", "local PNG output path for capture (new file)")
-	wait := flags.Duration("wait", 20*time.Second, "capture/click receipt wait budget; timeout never retries input")
+	wait := flags.Duration("wait", 20*time.Second, "capture/click/hold receipt wait budget; timeout never retries input")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -83,12 +83,12 @@ func runControl(args []string, output, diagnostics io.Writer) error {
 		}
 		_, err = io.WriteString(output, text)
 		return err
-	case "capture", "click", "run-session", "stop", "shutdown":
+	case "capture", "click", "hold", "run-session", "stop", "shutdown":
 	default:
 		return fmt.Errorf("unknown control command %q", command)
 	}
-	if command == "click" && (*reference == "" || *x < 0 || *y < 0) {
-		return fmt.Errorf("click requires -reference, -x and -y")
+	if (command == "click" || command == "hold") && (*reference == "" || *x < 0 || *y < 0) {
+		return fmt.Errorf("%s requires -reference, -x and -y", command)
 	}
 	if command == "capture" && *imagePath == "" {
 		return fmt.Errorf("capture requires -image for local output")
@@ -111,7 +111,7 @@ func runControl(args []string, output, diagnostics io.Writer) error {
 		}
 		return err
 	}
-	if command == "capture" || command == "click" {
+	if command == "capture" || command == "click" || command == "hold" {
 		waitCtx, cancel := context.WithTimeout(ctx, *wait)
 		defer cancel()
 		r, err = client.Wait(waitCtx, *id)

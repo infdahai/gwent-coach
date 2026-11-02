@@ -22,6 +22,7 @@ const LogLimit = 256 << 10
 type Backend interface {
 	Capture(context.Context) (desktop.Capture, error)
 	Click(context.Context, desktop.Capture, int, int, string) (desktop.Receipt, error)
+	Hold(context.Context, desktop.Capture, int, int, string) (desktop.Receipt, error)
 	RunSession(context.Context, string, io.Writer) error
 }
 
@@ -44,7 +45,7 @@ type Receipt struct {
 }
 
 type Status struct {
-	State        string   `json:"state"` // idle, capture, click, run-session, stopping
+	State        string   `json:"state"` // idle, capture, click, hold, run-session, stopping
 	ActiveID     string   `json:"active_id,omitempty"`
 	StopSignaled bool     `json:"stop_signaled"`
 	Error        string   `json:"error,omitempty"`

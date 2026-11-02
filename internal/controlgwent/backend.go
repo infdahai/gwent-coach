@@ -26,6 +26,10 @@ func (b Backend) Click(ctx context.Context, ref desktop.Capture, x, y int, stop 
 	return desktop.Click(ctx, ref, x, y, stop)
 }
 
+func (b Backend) Hold(ctx context.Context, ref desktop.Capture, x, y int, stop string) (desktop.Receipt, error) {
+	return desktop.Hold(ctx, ref, x, y, stop)
+}
+
 func (b Backend) Validate() error {
 	_, err := b.observedConfig()
 	return err
