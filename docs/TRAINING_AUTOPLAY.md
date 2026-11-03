@@ -14,7 +14,7 @@ Implementation is split across the following files under `internal/observe/`:
 | `observed_identity_guard*.go` | Click-time OCR identity guard for named selects (run-time fresh-frame re-verification); injectable OCR so Mac tests cover the logic | Windows wiring (this file) |
 | `observed_match_test.go` | Platform-independent runner tests (including OCR identity tests via `matchTestHost`) | runner (play agent) |
 | `observed_hand*.go` | `loadObservedHand` helper: hand-identity loader for both art-templates and tooltip name modes, geometry validation, DB-backed name resolution, `safeObservedUnit` | hand agent |
-| `observed_play_txn*.go` | `ObservedPlayTxn`: single card-play transaction extracted from lifecycle, preserving two-frame evidence check and pass/mulligan/result qualification | play agent |
+| `observed_play_txn*.go` | Card-play transaction (`playSelectedCard` / `observedPlayChannel`): single play selection extracted from lifecycle, preserving two-frame evidence check and pass/mulligan/result qualification | play agent |
 | `observed_preflight*.go` | `PreflightObservedMatch`: read-only offline preflight validation, resource connectivity check, result coverage report | preflight agent |
 | `cmd/` | CLI entry points: `-observed-match`, `preflight-observed`, control session | preflight/Win wiring |
 
@@ -36,7 +36,7 @@ Nonzero exit means blocking deficiencies. The config must still be validated ind
 To run against real assets on Mac:
 
 ```sh
-coach preflight-observed /private/tmp/gwent-preflight-*/match.json > report.json
+coach preflight-observed <match.json> > report.json
 ```
 
 ## Constrained observed match runner
