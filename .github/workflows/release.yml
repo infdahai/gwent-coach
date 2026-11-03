@@ -16,7 +16,7 @@ on:
 jobs:
   release:
     permissions:
-      contents: write  # needed for gh-release (only runs on tag push)
+      contents: write  # needed for gh-release on tag push
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -54,7 +54,7 @@ jobs:
         run: |
           cat > dist/VERSION <<'VEOF'
           commit=${{ github.sha }}
-          ref=${{ github.ref_name }}
+          event=${{ github.event_name }}
           go_toolchain=${{ steps.toolchain.outputs.go }}
           VEOF
 
