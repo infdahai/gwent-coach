@@ -8,6 +8,8 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode"
 
 	"gwentcoachmvp/internal/cardindex"
 	"gwentcoachmvp/internal/cardmatch"
@@ -42,7 +44,16 @@ type ObservedHandConfig struct {
 	Slots, GuardSlots                    []cardmatch.ROI
 	Clicks                               []image.Point
 	MaxDistance, MinGap                  int
-	matcher                              *cardmatch.Index
+	// Names identifies hovered hand cards by the tooltip name the game renders.
+	// It is the authoritative hand identity when present: art matching is not
+	// used to choose a play in that mode.
+	Names   []ObservedCardName `json:",omitempty"`
+	matcher *cardmatch.Index
+}
+
+type ObservedCardName struct {
+	Name   string
+	CardID int
 }
 
 func (h ObservedHandConfig) scanConfig(guard bool) HandScanConfig {
@@ -57,7 +68,66 @@ func (h ObservedHandConfig) scanConfig(guard bool) HandScanConfig {
 // to the game; this policy neither activates orders nor predicts their effects.
 func safeObservedUnit(id int) bool {
 	switch id {
-	case 201676, 142315, 203073, 200039, 203152, 142306:
+	case 201676, 142315, 203073, 200039, 203152, 142306,
+		203256, 132403, 200042, // deploy effects resolve without a choice
+		112202, 112203, 201559, 203089: // summon or passive deploy
+		return true
+	}
+	return false
+}
+
+// cardText normalizes OCR output for name comparison. Windows OCR separates
+// Han characters with spaces, so comparison ignores all whitespace.
+func cardText(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if !unicode.IsSpace(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// namedCard returns the configured card whose tooltip name appears first in
+// the OCR text. Ability text quotes referenced cards, so a name inside quotes
+// is not the hovered title and is skipped.
+func namedCard(names []ObservedCardName, text string) int {
+	t := cardText(text)
+	bestPos, bestID := -1, 0
+	for _, n := range names {
+		want := cardText(n.Name)
+		if want == "" {
+			continue
+		}
+		for at := 0; at <= len(t); {
+			idx := strings.Index(t[at:], want)
+			if idx < 0 {
+				break
+			}
+			pos := at + idx
+			if pos == 0 || !quotedRune(lastRune(t[:pos])) {
+				if bestPos < 0 || pos < bestPos {
+					bestPos, bestID = pos, n.CardID
+				}
+				break
+			}
+			at = pos + len(want)
+		}
+	}
+	return bestID
+}
+
+func lastRune(s string) rune {
+	var r rune
+	for _, c := range s {
+		r = c
+	}
+	return r
+}
+
+func quotedRune(r rune) bool {
+	switch r {
+	case '"', '\'', '“', '”', '‘', '’', '「', '」', '『', '』', '«', '»':
 		return true
 	}
 	return false
@@ -158,10 +228,23 @@ func LoadObservedMatchConfig(path string) (ObservedMatchConfig, error) {
 	if len(templateIDs) < 2 {
 		return cfg, fmt.Errorf("hand identity requires competing card templates")
 	}
+	namedIDs := map[int]bool{}
+	seenNames := map[string]bool{}
+	for _, n := range h.Names {
+		name := cardText(n.Name)
+		if name == "" || seenNames[name] || namedIDs[n.CardID] || !safeObservedUnit(n.CardID) {
+			return cfg, fmt.Errorf("invalid or duplicate identified card name")
+		}
+		seenNames[name], namedIDs[n.CardID] = true, true
+	}
+	if len(h.Names) == 1 {
+		return cfg, fmt.Errorf("hand identification requires competing card names")
+	}
 	seen := map[string]bool{}
 	for i := range cfg.Plays {
 		p := &cfg.Plays[i]
-		if !safeSessionID(p.ID) || seen[p.ID] || !safeObservedUnit(p.CardID) || !templateIDs[p.CardID] || !p.Row.In(p.BoardROI) || p.BoardROI.Empty() || !p.BoardROI.In(bounds) {
+		known := templateIDs[p.CardID] || namedIDs[p.CardID]
+		if !safeSessionID(p.ID) || seen[p.ID] || !safeObservedUnit(p.CardID) || !known || !p.Row.In(p.BoardROI) || p.BoardROI.Empty() || !p.BoardROI.In(bounds) {
 			return cfg, fmt.Errorf("invalid or unsupported safe play %q", p.ID)
 		}
 		seen[p.ID] = true

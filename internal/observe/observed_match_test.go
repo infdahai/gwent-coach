@@ -329,3 +329,66 @@ func TestObservedMatchRefusesMissingReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNamedCardSkipsQuotedReferences(t *testing.T) {
+	names := []ObservedCardName{{Name: "艾斯卡尔", CardID: 112202}, {Name: "维瑟米尔", CardID: 112203}}
+	cases := []struct {
+		text string
+		want int
+	}{
+		{"卡 牌 大 师 维 瑟 米 尔 猎 魔 人 部 署 ： 从 牌 组 中 召 唤 “ 艾 斯 卡 尔 ”", 112203},
+		{"卡 牌 大 师 艾 斯 卡 尔 猎 魔 人 部 署 ： 从 牌 组 中 召 唤 “ 维 瑟 米 尔 ”", 112202},
+		{"卡 牌 大 师 9 / 10 放 弃 跟 牌", 0},
+	}
+	for _, c := range cases {
+		if got := namedCard(names, c.text); got != c.want {
+			t.Fatalf("namedCard(%q)=%d want %d", c.text, got, c.want)
+		}
+	}
+}
+
+func TestObservedMatchIdentifiesHandByName(t *testing.T) {
+	states := []string{"training", "mulligan", "mulligan-confirm", "turn/ready", "turn/ready", "unknown/selected", "turn/placed", "opponent/ended", "turn", "passed", "mulligan", "mulligan-confirm", "turn", "passed", "defeat"}
+	h := matchTestHost{frames: matchFrames(states...)}
+	cfg := matchTestConfig()
+	cfg.Hand.Names = []ObservedCardName{{Name: "玛哈坎勇士", CardID: 200042}, {Name: "狼群", CardID: 132403}}
+	cfg.Plays[0].CardID = 200042
+	var hovered []int
+	host := h.host()
+	host.Identify = func(_ context.Context, _ observedMatchFrame, slot int) (int, observedMatchFrame, error) {
+		hovered = append(hovered, slot)
+		f := observedMatchFrame{navFrame: navFrame{Reference: fmt.Sprintf("hover-%d-%d", slot, len(hovered)), Captured: time.Now(), Phase: "turn"}, Plays: map[string]string{"defender": "ready"}}
+		if slot == 1 {
+			return 200042, f, nil
+		}
+		return 132403, f, nil
+	}
+	if err := runObservedMatch(context.Background(), cfg, host, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(hovered) != "[0 1]" {
+		t.Fatalf("hovered slots %v", hovered)
+	}
+	var selected *observedMatchInput
+	for i := range h.sent {
+		if h.sent[i].Name == "select_card" {
+			selected = &h.sent[i]
+		}
+	}
+	if selected == nil || selected.Slot != 1 || !selected.Identified || selected.PlayID != "defender" {
+		t.Fatalf("select %+v", selected)
+	}
+	if selected.Action.X != cfg.Hand.Clicks[1].X || selected.Action.Y != cfg.Hand.Clicks[1].Y {
+		t.Fatalf("select point %+v", selected.Action)
+	}
+}
+
+func TestObservedMatchRequiresIdentificationHost(t *testing.T) {
+	h := matchTestHost{frames: matchFrames("training", "mulligan", "mulligan-confirm", "turn/ready")}
+	cfg := matchTestConfig()
+	cfg.Hand.Names = []ObservedCardName{{Name: "玛哈坎勇士", CardID: 200042}, {Name: "狼群", CardID: 132403}}
+	cfg.Plays[0].CardID = 200042
+	if err := runObservedMatch(context.Background(), cfg, h.host(), io.Discard); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatal(err)
+	}
+}

@@ -109,7 +109,7 @@ func RunObservedMatch(ctx context.Context, out string, logger *log.Logger, cfg O
 		if err != nil {
 			return observedMatchFrame{}, err
 		}
-		frame := observedMatchFrame{navFrame: navFrame{Reference: paths[0], Captured: at}, Plays: map[string]string{}}
+		frame := observedMatchFrame{navFrame: navFrame{Reference: paths[0], Captured: at}, Image: r.Screenshot, Plays: map[string]string{}}
 		for _, w := range r.Windows {
 			if w.Handle == r.Foreground {
 				frame.Width, frame.Height = int(w.Client.Right-w.Client.Left), int(w.Client.Bottom-w.Client.Top)
@@ -139,7 +139,7 @@ func RunObservedMatch(ctx context.Context, out string, logger *log.Logger, cfg O
 				}
 				found = true
 				a.PhaseModel, a.phaseModel, a.ExpectedPhase = p.ModelPath, p.model, frame.Plays[p.ID]
-				if input.Name == "select_card" {
+				if input.Name == "select_card" && !input.Identified {
 					a.extraPhaseModel, a.extraExpectedPhase = cfg.model, "turn"
 					cardID := p.CardID
 					a.imageGuard = func(img image.Image) error { return guardObservedCard(img, cfg.Hand, input.Slot, cardID) }
@@ -152,6 +152,45 @@ func RunObservedMatch(ctx context.Context, out string, logger *log.Logger, cfg O
 		a.primitiveOnly, a.onReceipt = true, receipt
 		a.deadline = frame.Captured.Add(2 * time.Second)
 		return ExecuteContext(ctx, out, nativeLogger, a)
+	}
+	identify := func(ctx context.Context, frame observedMatchFrame, slot int) (int, observedMatchFrame, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, frame, err
+		}
+		if err := stopped(cfg.StopFile); err != nil {
+			return 0, frame, err
+		}
+		if slot < 0 || slot >= len(cfg.Hand.Clicks) {
+			return 0, frame, fmt.Errorf("invalid hand slot")
+		}
+		if frame.Reference == "" || frame.Image == "" {
+			return 0, frame, fmt.Errorf("hand identification requires an observed frame")
+		}
+		point := cfg.Hand.Clicks[slot]
+		a := Action{Kind: "hover", X: point.X, Y: point.Y, Reference: frame.Reference, StopFile: cfg.StopFile}
+		a.primitiveOnly = true
+		a.onReceipt = func(InputReceipt) error { return nil }
+		a.deadline = frame.Captured.Add(2 * time.Second)
+		if err := ExecuteContext(ctx, out, nativeLogger, a); err != nil {
+			return 0, frame, fmt.Errorf("hand hover: %w", err)
+		}
+		// The tooltip appears after the cursor settles; identify on a capture
+		// that follows it, so the same frame can authorize the next hover.
+		select {
+		case <-ctx.Done():
+			return 0, frame, ctx.Err()
+		case <-time.After(900 * time.Millisecond):
+		}
+		hovered, err := capture(ctx)
+		if err != nil {
+			return 0, frame, err
+		}
+		text, err := RecognizeText(hovered.Image, io.Discard)
+		if err != nil {
+			return 0, hovered, fmt.Errorf("hand tooltip OCR: %w", err)
+		}
+		nativeLogger.Printf("hand_slot=%d ocr=%q", slot, text)
+		return namedCard(cfg.Hand.Names, text), hovered, nil
 	}
 	wait := func(ctx context.Context) error {
 		timer := time.NewTimer(250 * time.Millisecond)
@@ -181,5 +220,5 @@ func RunObservedMatch(ctx context.Context, out string, logger *log.Logger, cfg O
 		_, err := fmt.Fprintf(output, "%s status=%s round=%d plays=%d phase=%s action=%s error=%s\n", e.Time.Format(time.RFC3339Nano), e.Status, e.Round, e.Plays, phase, action, e.Error)
 		return err
 	}
-	return runObservedMatch(ctx, cfg, observedMatchHost{Observe: capture, Send: send, Pause: func() error { return stopped(cfg.StopFile) }, Wait: wait, Progress: progress}, journal)
+	return runObservedMatch(ctx, cfg, observedMatchHost{Observe: capture, Send: send, Identify: identify, Pause: func() error { return stopped(cfg.StopFile) }, Wait: wait, Progress: progress}, journal)
 }

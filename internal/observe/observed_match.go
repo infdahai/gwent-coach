@@ -13,15 +13,17 @@ import (
 
 type observedMatchFrame struct {
 	navFrame
+	Image string             `json:"image,omitempty"`
 	Plays map[string]string  `json:"plays,omitempty"`
 	Hand  []cardmatch.Result `json:"hand,omitempty"`
 }
 
 type observedMatchInput struct {
-	Name   string `json:"name"`
-	Action Action `json:"action"`
-	PlayID string `json:"play_id,omitempty"`
-	Slot   int    `json:"slot,omitempty"`
+	Name       string `json:"name"`
+	Action     Action `json:"action"`
+	PlayID     string `json:"play_id,omitempty"`
+	Slot       int    `json:"slot,omitempty"`
+	Identified bool   `json:"identified_by_name,omitempty"`
 }
 
 type observedMatchEvent struct {
@@ -38,6 +40,7 @@ type observedMatchEvent struct {
 type observedMatchHost struct {
 	Observe  func(context.Context) (observedMatchFrame, error)
 	Send     func(context.Context, observedMatchFrame, observedMatchInput, func(InputReceipt) error) error
+	Identify func(context.Context, observedMatchFrame, int) (int, observedMatchFrame, error)
 	Pause    func() error
 	Wait     func(context.Context) error
 	Progress func(observedMatchEvent) error
@@ -239,7 +242,56 @@ func runObservedMatch(ctx context.Context, cfg ObservedMatchConfig, host observe
 		for pair[1].Phase == "turn" {
 			var play *ObservedPlay
 			slot := -1
-			for i := range cfg.Plays {
+			identified := false
+			if len(cfg.Hand.Names) > 0 {
+				// Named tooltips are the authoritative hand identity. Hover each
+				// slot until a configured card that can still be played is seen.
+				want := map[int]bool{}
+				for i := range cfg.Plays {
+					p := &cfg.Plays[i]
+					if !used[p.ID] && pair[0].Plays[p.ID] == "ready" && pair[1].Plays[p.ID] == "ready" {
+						want[p.CardID] = true
+					}
+				}
+				if len(want) > 0 {
+					if host.Identify == nil {
+						return fmt.Errorf("hand name identification required but unavailable")
+					}
+					for j := 0; j < len(cfg.Hand.Clicks) && pair[1].Phase == "turn"; j++ {
+						id, hovered, err := host.Identify(ctx, pair[1], j)
+						if err != nil {
+							return err
+						}
+						pair[1] = hovered
+						if id == 0 || !want[id] {
+							continue
+						}
+						for i := range cfg.Plays {
+							p := &cfg.Plays[i]
+							if !used[p.ID] && p.CardID == id {
+								play, slot, identified = p, j, true
+								break
+							}
+						}
+						if play != nil {
+							break
+						}
+					}
+				}
+				if play != nil {
+					// The hovered card stays under the cursor: refresh the pair so
+					// the click is authorized by a frame of the settled hover.
+					var refreshErr error
+					pair, refreshErr = await("", []string{"turn"}, nil)
+					if refreshErr != nil {
+						return refreshErr
+					}
+					if pair[1].Plays[play.ID] != "ready" {
+						return fmt.Errorf("identified hand slot is not ready")
+					}
+				}
+			}
+			for i := 0; i < len(cfg.Plays) && play == nil && len(cfg.Hand.Names) == 0; i++ {
 				p := &cfg.Plays[i]
 				if used[p.ID] || pair[0].Plays[p.ID] != "ready" || pair[1].Plays[p.ID] != "ready" {
 					continue
@@ -266,7 +318,7 @@ func runObservedMatch(ctx context.Context, cfg ObservedMatchConfig, host observe
 				if err = send(pair, input); err != nil {
 					return err
 				}
-				pair, err = await("", []string{"passed"}, []string{"turn", "transition"})
+				pair, err = await("", []string{"passed", "opponent"}, []string{"turn", "transition"})
 				if err != nil {
 					return err
 				}
@@ -282,7 +334,7 @@ func runObservedMatch(ctx context.Context, cfg ObservedMatchConfig, host observe
 			used[play.ID] = true
 			card := cfg.Hand.Clicks[slot]
 			selectInput := click("select_card", card.X, card.Y, play.ID)
-			selectInput.Slot = slot
+			selectInput.Slot, selectInput.Identified = slot, identified
 			if err = send(pair, selectInput); err != nil {
 				return err
 			}
