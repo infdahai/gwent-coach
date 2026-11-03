@@ -392,3 +392,79 @@ func TestObservedMatchRequiresIdentificationHost(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// passBoundaryFrames builds a two-round match whose pass transitions use the
+// supplied successor states. Each round plays once (auto-ended), then passes.
+func passBoundaryFrames(round1Successor, round2Successor []string) []observedMatchFrame {
+	states := []string{"training", "mulligan", "mulligan-confirm", "turn/ready", "unknown/selected", "opponent/ended", "turn"}
+	states = append(states, round1Successor...)
+	states = append(states, "mulligan-confirm", "turn")
+	states = append(states, round2Successor...)
+	return matchFrames(states...)
+}
+
+// TestObservedMatchPassFastTransitions proves a pass that is followed directly
+// by the next mulligan or a result is confirmed from the same fresh pair. The
+// old intermediate stages must keep working, no input may be replayed, and the
+// fake host must not be over-read (it fails when exhausted).
+func TestObservedMatchPassFastTransitions(t *testing.T) {
+	cases := []struct {
+		name           string
+		round1, round2 []string
+	}{
+		{name: "direct-mulligan-and-result", round1: []string{"mulligan"}, round2: []string{"defeat"}},
+		{name: "passed-intermediate", round1: []string{"passed", "mulligan"}, round2: []string{"passed", "defeat"}},
+		{name: "opponent-intermediate", round1: []string{"opponent", "mulligan"}, round2: []string{"opponent", "defeat"}},
+		{name: "mixed-direct-and-passed", round1: []string{"mulligan"}, round2: []string{"passed", "defeat"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := matchTestHost{frames: passBoundaryFrames(tc.round1, tc.round2)}
+			var log bytes.Buffer
+			if err := runObservedMatch(context.Background(), matchTestConfig(), h.host(), &log); err != nil {
+				t.Fatal(err)
+			}
+			var actions []string
+			for _, input := range h.sent {
+				actions = append(actions, input.Name)
+			}
+			want := "start_training,finish_mulligan,confirm_mulligan,select_card,place_card,pass,finish_mulligan,confirm_mulligan,pass"
+			if strings.Join(actions, ",") != want {
+				t.Fatalf("actions=%v", actions)
+			}
+			if !strings.Contains(log.String(), `"status":"result_confirmed"`) {
+				t.Fatal("missing result_confirmed")
+			}
+			if !strings.Contains(log.String(), `"round":2,"confirmed_plays":1`) {
+				t.Fatal("missing qualified round-2 evidence")
+			}
+		})
+	}
+}
+
+// TestObservedMatchDirectResultStillRequiresRoundGate proves a direct result
+// after a single round is observed but never fabricated into a qualified one.
+func TestObservedMatchDirectResultStillRequiresRoundGate(t *testing.T) {
+	states := []string{"training", "mulligan", "mulligan-confirm", "turn/ready", "unknown/selected", "opponent/ended", "turn", "defeat"}
+	h := matchTestHost{frames: matchFrames(states...)}
+	var log bytes.Buffer
+	err := runObservedMatch(context.Background(), matchTestConfig(), h.host(), &log)
+	if err == nil || !strings.Contains(err.Error(), "lacks confirmed card") || strings.Contains(log.String(), `"status":"result_confirmed"`) {
+		t.Fatalf("err=%v log=%s", err, &log)
+	}
+	if !strings.Contains(log.String(), `"status":"pass_confirmed"`) {
+		t.Fatal("direct result should still confirm the pass")
+	}
+}
+
+// TestObservedMatchPassOnlyStillUnqualified proves a direct mulligan/result
+// observed after a pass cannot qualify a match with no confirmed card play.
+func TestObservedMatchPassOnlyStillUnqualified(t *testing.T) {
+	states := []string{"training", "mulligan", "mulligan-confirm", "turn", "mulligan", "mulligan-confirm", "turn", "defeat"}
+	h := matchTestHost{frames: matchFrames(states...)}
+	var log bytes.Buffer
+	err := runObservedMatch(context.Background(), matchTestConfig(), h.host(), &log)
+	if err == nil || !strings.Contains(err.Error(), "lacks confirmed card") || strings.Contains(log.String(), `"status":"result_confirmed"`) {
+		t.Fatalf("err=%v log=%s", err, &log)
+	}
+}

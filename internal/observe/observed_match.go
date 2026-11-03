@@ -190,9 +190,6 @@ func runObservedMatch(ctx context.Context, cfg ObservedMatchConfig, host observe
 		notBefore = receipt.DeliveredAt
 		return record("delivered_unconfirmed", nil, &input, &receipt, nil)
 	}
-	click := func(name string, x, y int, playID string) observedMatchInput {
-		return observedMatchInput{Name: name, Action: Action{Kind: "click", X: x, Y: y}, PlayID: playID}
-	}
 	confirm := func(name string, pair [2]observedMatchFrame) error {
 		return record(name+"_confirmed", pair[:], nil, nil, nil)
 	}
@@ -200,7 +197,7 @@ func runObservedMatch(ctx context.Context, cfg ObservedMatchConfig, host observe
 	if err != nil {
 		return err
 	}
-	if err = send(pair, click("start_training", cfg.Start.X, cfg.Start.Y, "")); err != nil {
+	if err = send(pair, observedClick("start_training", cfg.Start.X, cfg.Start.Y, "")); err != nil {
 		return err
 	}
 	pair, err = await("", []string{"mulligan"}, []string{"training", "transition"})
@@ -219,7 +216,7 @@ func runObservedMatch(ctx context.Context, cfg ObservedMatchConfig, host observe
 		if err = confirm("round_start", pair); err != nil {
 			return err
 		}
-		if err = send(pair, click("finish_mulligan", cfg.FinishMulligan.X, cfg.FinishMulligan.Y, "")); err != nil {
+		if err = send(pair, observedClick("finish_mulligan", cfg.FinishMulligan.X, cfg.FinishMulligan.Y, "")); err != nil {
 			return err
 		}
 		pair, err = await("", []string{"mulligan-confirm"}, []string{"mulligan", "transition"})
@@ -229,7 +226,7 @@ func runObservedMatch(ctx context.Context, cfg ObservedMatchConfig, host observe
 		if err = confirm("finish_mulligan", pair); err != nil {
 			return err
 		}
-		if err = send(pair, click("confirm_mulligan", cfg.ConfirmMulligan.X, cfg.ConfirmMulligan.Y, "")); err != nil {
+		if err = send(pair, observedClick("confirm_mulligan", cfg.ConfirmMulligan.X, cfg.ConfirmMulligan.Y, "")); err != nil {
 			return err
 		}
 		pair, err = await("", []string{"turn"}, []string{"mulligan-confirm", "opponent", "transition"})
@@ -239,6 +236,7 @@ func runObservedMatch(ctx context.Context, cfg ObservedMatchConfig, host observe
 		if err = confirm("confirm_mulligan", pair); err != nil {
 			return err
 		}
+		channel := observedPlayChannel{await: await, send: send, confirm: confirm}
 		for pair[1].Phase == "turn" {
 			var play *ObservedPlay
 			slot := -1
@@ -318,54 +316,31 @@ func runObservedMatch(ctx context.Context, cfg ObservedMatchConfig, host observe
 				if err = send(pair, input); err != nil {
 					return err
 				}
-				pair, err = await("", []string{"passed", "opponent"}, []string{"turn", "transition"})
+				// A pass can resolve the round or the match immediately. A direct
+				// mulligan or result is a legal successor and must confirm the
+				// pass in the same two-frame pair; awaiting only passed/opponent
+				// first would reject it or consume the event twice.
+				pair, err = await("", []string{"passed", "opponent", "mulligan", "victory", "defeat", "draw"}, []string{"turn", "transition"})
 				if err != nil {
 					return err
 				}
 				if err = confirm("pass", pair); err != nil {
 					return err
 				}
-				pair, err = await("", []string{"mulligan", "victory", "defeat", "draw"}, []string{"passed", "opponent", "transition"})
-				if err != nil {
-					return err
+				switch pair[1].Phase {
+				case "mulligan", "victory", "defeat", "draw":
+					// Already at the next round or result; do not wait again.
+				default:
+					pair, err = await("", []string{"mulligan", "victory", "defeat", "draw"}, []string{"passed", "opponent", "transition"})
+					if err != nil {
+						return err
+					}
 				}
 				break
 			}
 			used[play.ID] = true
-			card := cfg.Hand.Clicks[slot]
-			selectInput := click("select_card", card.X, card.Y, play.ID)
-			selectInput.Slot, selectInput.Identified = slot, identified
-			if err = send(pair, selectInput); err != nil {
-				return err
-			}
-			pair, err = await(play.ID, []string{"selected"}, []string{"ready"})
+			pair, err = playSelectedCard(channel, cfg, pair, *play, slot, identified, &plays)
 			if err != nil {
-				return err
-			}
-			if err = confirm("select_card", pair); err != nil {
-				return err
-			}
-			if err = send(pair, click("place_card", play.Row.X, play.Row.Y, play.ID)); err != nil {
-				return err
-			}
-			pair, err = await(play.ID, []string{"placed", "ended"}, []string{"selected"})
-			if err != nil {
-				return err
-			}
-			plays++
-			if err = confirm("card_play", pair); err != nil {
-				return err
-			}
-			if pair[1].Plays[play.ID] == "placed" {
-				if err = send(pair, click("end_turn", cfg.EndTurn.X, cfg.EndTurn.Y, play.ID)); err != nil {
-					return err
-				}
-				pair, err = await(play.ID, []string{"ended"}, []string{"placed"})
-				if err != nil {
-					return err
-				}
-			}
-			if err = confirm("turn_end", pair); err != nil {
 				return err
 			}
 			pair, err = await("", []string{"turn", "mulligan", "victory", "defeat", "draw"}, []string{"opponent", "transition"})
@@ -386,7 +361,7 @@ func runObservedMatch(ctx context.Context, cfg ObservedMatchConfig, host observe
 			return err
 		}
 		if cfg.Exit != nil {
-			if err = send(pair, click("exit_result", cfg.Exit.X, cfg.Exit.Y, "")); err != nil {
+			if err = send(pair, observedClick("exit_result", cfg.Exit.X, cfg.Exit.Y, "")); err != nil {
 				return err
 			}
 			pair, err = await("", []string{"training"}, []string{pair[1].Phase, "transition"})
