@@ -55,7 +55,7 @@ func observedConfigFixture(t *testing.T) (string, ObservedMatchConfig, func(stri
 	cfg.Plays[0].ModelSHA256 = write("play.json", model("ready", "selected", "ended"))
 	cfg.Plays[0].BoardROI = board
 	version := cardindex.Version{Data: cardindex.DataVersion, Rules: cardindex.RulesVersion}
-	if err := cardindex.Import(filepath.Join(dir, "cards.db"), version, []string{"../../data/cards/14.10.0/en/cards.json"}); err != nil {
+	if err := cardindex.Import(filepath.Join(dir, "cards.db"), version, []string{"../../data/cards/14.10.0/en/cards.json", "../../data/cards/14.10.0/cn/cards.json"}); err != nil {
 		t.Fatal(err)
 	}
 	var forward, reverse cardmatch.Feature

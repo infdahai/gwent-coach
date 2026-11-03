@@ -8,8 +8,6 @@ import (
 	"image"
 	"os"
 	"path/filepath"
-	"strings"
-	"unicode"
 
 	"gwentcoachmvp/internal/cardindex"
 	"gwentcoachmvp/internal/cardmatch"
@@ -39,98 +37,22 @@ type ObservedPlay struct {
 	model                      *PhaseModel
 }
 
-type ObservedHandConfig struct {
-	Database, Templates, TemplatesSHA256 string
-	Slots, GuardSlots                    []cardmatch.ROI
-	Clicks                               []image.Point
-	MaxDistance, MinGap                  int
-	// Names identifies hovered hand cards by the tooltip name the game renders.
-	// It is the authoritative hand identity when present: art matching is not
-	// used to choose a play in that mode.
-	Names   []ObservedCardName `json:",omitempty"`
-	matcher *cardmatch.Index
-}
-
-type ObservedCardName struct {
-	Name   string
-	CardID int
-}
-
-func (h ObservedHandConfig) scanConfig(guard bool) HandScanConfig {
-	slots := h.Slots
-	if guard {
-		slots = h.GuardSlots
+func requireObservedPhases(model *PhaseModel, names ...string) error {
+	if model.Width != 1920 || model.Height != 1080 {
+		return fmt.Errorf("observed match requires native 1920x1080 model")
 	}
-	return HandScanConfig{Width: 1920, Height: 1080, Slots: slots, MaxDistance: h.MaxDistance, MinGap: h.MinGap}
-}
-
-// These units have no deploy choice or target. Passive/order effects are left
-// to the game; this policy neither activates orders nor predicts their effects.
-func safeObservedUnit(id int) bool {
-	switch id {
-	case 201676, 142315, 203073, 200039, 203152, 142306,
-		203256, 132403, 200042, // deploy effects resolve without a choice
-		112202, 112203, 201559, 203089: // summon or passive deploy
-		return true
-	}
-	return false
-}
-
-// cardText normalizes OCR output for name comparison. Windows OCR separates
-// Han characters with spaces, so comparison ignores all whitespace.
-func cardText(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if !unicode.IsSpace(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
-
-// namedCard returns the configured card whose tooltip name appears first in
-// the OCR text. Ability text quotes referenced cards, so a name inside quotes
-// is not the hovered title and is skipped.
-func namedCard(names []ObservedCardName, text string) int {
-	t := cardText(text)
-	bestPos, bestID := -1, 0
-	for _, n := range names {
-		want := cardText(n.Name)
-		if want == "" {
-			continue
-		}
-		for at := 0; at <= len(t); {
-			idx := strings.Index(t[at:], want)
-			if idx < 0 {
-				break
+	for _, name := range names {
+		found := false
+		for _, p := range model.Phases {
+			if p.Name == name {
+				found = true
 			}
-			pos := at + idx
-			if pos == 0 || !quotedRune(lastRune(t[:pos])) {
-				if bestPos < 0 || pos < bestPos {
-					bestPos, bestID = pos, n.CardID
-				}
-				break
-			}
-			at = pos + len(want)
+		}
+		if !found {
+			return fmt.Errorf("calibrated phase %s required", name)
 		}
 	}
-	return bestID
-}
-
-func lastRune(s string) rune {
-	var r rune
-	for _, c := range s {
-		r = c
-	}
-	return r
-}
-
-func quotedRune(r rune) bool {
-	switch r {
-	case '"', '\'', '“', '”', '‘', '’', '「', '」', '『', '』', '«', '»':
-		return true
-	}
-	return false
+	return nil
 }
 
 func LoadObservedMatchConfig(path string) (ObservedMatchConfig, error) {
@@ -184,14 +106,29 @@ func LoadObservedMatchConfig(path string) (ObservedMatchConfig, error) {
 		return cfg, fmt.Errorf("invalid exit point")
 	}
 	h := &cfg.Hand
-	if len(h.Slots) < 1 || len(h.Slots) > 10 || len(h.Clicks) != len(h.Slots) || len(h.GuardSlots) != len(h.Slots) {
-		return cfg, fmt.Errorf("1..10 calibrated hand slots, guard slots and click points required")
+	if len(h.Slots) < 1 || len(h.Slots) > 10 || len(h.Clicks) != len(h.Slots) {
+		return cfg, fmt.Errorf("1..10 calibrated hand slots and click points required")
+	}
+	// Art mode guards every slot with a post-hover region. Names mode identifies
+	// by tooltip, so guard boxes are unused and may be omitted; if supplied they
+	// must still be well formed.
+	guard := len(h.Names) == 0
+	if guard {
+		if len(h.GuardSlots) != len(h.Slots) {
+			return cfg, fmt.Errorf("guard slots required for art identification")
+		}
+	} else if len(h.GuardSlots) != 0 && len(h.GuardSlots) != len(h.Slots) {
+		return cfg, fmt.Errorf("guard slots must match hand slots when provided")
 	}
 	if err := (cardmatch.Thresholds{MaxDistance: h.MaxDistance, MinGap: h.MinGap}).Validate(); err != nil {
 		return cfg, err
 	}
 	for i, roi := range h.Slots {
-		for _, r := range []cardmatch.ROI{roi, h.GuardSlots[i]} {
+		regions := []cardmatch.ROI{roi}
+		if len(h.GuardSlots) > 0 {
+			regions = append(regions, h.GuardSlots[i])
+		}
+		for _, r := range regions {
 			if r.Width < 9 || r.Height < 8 || !image.Rect(r.X, r.Y, r.X+r.Width, r.Y+r.Height).In(bounds) {
 				return cfg, fmt.Errorf("invalid hand art region")
 			}
@@ -200,51 +137,54 @@ func LoadObservedMatchConfig(path string) (ObservedMatchConfig, error) {
 			return cfg, fmt.Errorf("hand click must be inside its observed art region")
 		}
 	}
-	h.Database, h.Templates = resolve(h.Database), resolve(h.Templates)
-	db, err := cardindex.Open(h.Database, cardindex.Version{Data: cardindex.DataVersion, Rules: cardindex.RulesVersion})
-	if err != nil {
-		return cfg, err
-	}
-	templatesData, err := os.ReadFile(h.Templates)
-	if err != nil {
-		return cfg, err
-	}
-	templateSum := sha256.Sum256(templatesData)
-	if hex.EncodeToString(templateSum[:]) != h.TemplatesSHA256 {
-		return cfg, fmt.Errorf("hand template digest mismatch")
-	}
-	var templates cardmatch.File
-	if err = json.Unmarshal(templatesData, &templates); err != nil {
-		return cfg, err
-	}
-	h.matcher, err = cardmatch.New(templates, db)
-	if err != nil {
-		return cfg, err
-	}
-	templateIDs := map[int]bool{}
-	for _, template := range templates.Templates {
-		templateIDs[template.CardID] = true
-	}
-	if len(templateIDs) < 2 {
-		return cfg, fmt.Errorf("hand identity requires competing card templates")
-	}
-	namedIDs := map[int]bool{}
-	seenNames := map[string]bool{}
-	for _, n := range h.Names {
-		name := cardText(n.Name)
-		if name == "" || seenNames[name] || namedIDs[n.CardID] || !safeObservedUnit(n.CardID) {
-			return cfg, fmt.Errorf("invalid or duplicate identified card name")
+
+	// Track which card IDs are known through art templates (if loaded) and/or names.
+	knownIDs := map[int]bool{}
+	if len(h.Names) > 0 {
+		// Names mode: validate names against card database. Template loading is
+		// skipped; matcher stays nil.
+		namedIDs, err := loadObservedHand(path, h)
+		if err != nil {
+			return cfg, err
 		}
-		seenNames[name], namedIDs[n.CardID] = true, true
+		for id := range namedIDs {
+			knownIDs[id] = true
+		}
+	} else {
+		// Art mode: load templates and build the matcher.
+		h.Database, h.Templates = resolve(h.Database), resolve(h.Templates)
+		db, err := cardindex.Open(h.Database, cardindex.Version{Data: cardindex.DataVersion, Rules: cardindex.RulesVersion})
+		if err != nil {
+			return cfg, err
+		}
+		templatesData, err := os.ReadFile(h.Templates)
+		if err != nil {
+			return cfg, err
+		}
+		templateSum := sha256.Sum256(templatesData)
+		if hex.EncodeToString(templateSum[:]) != h.TemplatesSHA256 {
+			return cfg, fmt.Errorf("hand template digest mismatch")
+		}
+		var templates cardmatch.File
+		if err = json.Unmarshal(templatesData, &templates); err != nil {
+			return cfg, err
+		}
+		h.matcher, err = cardmatch.New(templates, db)
+		if err != nil {
+			return cfg, err
+		}
+		for _, template := range templates.Templates {
+			knownIDs[template.CardID] = true
+		}
+		if len(knownIDs) < 2 {
+			return cfg, fmt.Errorf("hand identity requires competing card templates")
+		}
 	}
-	if len(h.Names) == 1 {
-		return cfg, fmt.Errorf("hand identification requires competing card names")
-	}
+
 	seen := map[string]bool{}
 	for i := range cfg.Plays {
 		p := &cfg.Plays[i]
-		known := templateIDs[p.CardID] || namedIDs[p.CardID]
-		if !safeSessionID(p.ID) || seen[p.ID] || !safeObservedUnit(p.CardID) || !known || !p.Row.In(p.BoardROI) || p.BoardROI.Empty() || !p.BoardROI.In(bounds) {
+		if !safeSessionID(p.ID) || seen[p.ID] || !safeObservedUnit(p.CardID) || !knownIDs[p.CardID] || !p.Row.In(p.BoardROI) || p.BoardROI.Empty() || !p.BoardROI.In(bounds) {
 			return cfg, fmt.Errorf("invalid or unsupported safe play %q", p.ID)
 		}
 		seen[p.ID] = true
@@ -266,38 +206,4 @@ func LoadObservedMatchConfig(path string) (ObservedMatchConfig, error) {
 		}
 	}
 	return cfg, nil
-}
-
-func guardObservedCard(img image.Image, hand ObservedHandConfig, slot, cardID int) error {
-	if slot < 0 || slot >= len(hand.GuardSlots) {
-		return fmt.Errorf("invalid guarded hand slot")
-	}
-	cfg := hand.scanConfig(true)
-	cfg.Slots = cfg.Slots[slot : slot+1]
-	matches, err := scanHandFrame(cfg, hand.matcher, img, false)
-	if err != nil {
-		return err
-	}
-	if matches[0].Status != "candidate" || matches[0].CardID != cardID || matches[0].RunnerDistance < 0 {
-		return fmt.Errorf("guarded hand identity changed or unknown")
-	}
-	return nil
-}
-
-func requireObservedPhases(model *PhaseModel, names ...string) error {
-	if model.Width != 1920 || model.Height != 1080 {
-		return fmt.Errorf("observed match requires native 1920x1080 model")
-	}
-	for _, name := range names {
-		found := false
-		for _, p := range model.Phases {
-			if p.Name == name {
-				found = true
-			}
-		}
-		if !found {
-			return fmt.Errorf("calibrated phase %s required", name)
-		}
-	}
-	return nil
 }
