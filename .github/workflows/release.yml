@@ -11,9 +11,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
 
@@ -38,7 +38,7 @@ jobs:
           echo "Binaries for all platforms. See the [repository](https://github.com/infdahai/gwent-coach) for changelog and documentation." >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           body: ${{ steps.notes.outputs.notes }}
