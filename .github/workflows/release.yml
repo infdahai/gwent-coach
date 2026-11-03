@@ -1,35 +1,73 @@
+# Builds cross-platform binaries for every cmd/* package.
+#
+# Tag push (v*): builds all platforms, generates SHA256 checksums, and creates
+#   a GitHub Release with release notes.
+# workflow_dispatch: builds only the Windows amd64 coach binary, uploads it as
+#   a workflow artifact (no Release created). Useful for manual testing without
+#   cutting a tag.
+
 name: Release
 
 on:
   push:
     tags: ['v*']
-
-permissions:
-  contents: write
+  workflow_dispatch:
 
 jobs:
   release:
+    permissions:
+      contents: write  # needed for gh-release on tag push
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
-          go-version: stable
+          go-version-file: go.mod
+          cache: true
 
-      - name: Build binaries
+      # Record the Go toolchain version for the VERSION manifest.
+      - id: toolchain
+        run: echo "go=$(go version | sed 's/^go version //; s/ /-/g')" >> "$GITHUB_OUTPUT"
+
+      # Build the tag-release matrix for all platforms.
+      - name: Build all platforms (tag)
+        if: github.event_name == 'push'
         run: |
           mkdir -p dist
           for cmd in cmd/*/; do
             name=$(basename "$cmd")
-            GOOS=linux GOARCH=amd64 go build -o "dist/${name}-linux-amd64" "./${cmd%/}"
-            GOOS=linux GOARCH=arm64 go build -o "dist/${name}-linux-arm64" "./${cmd%/}"
-            GOOS=darwin GOARCH=amd64 go build -o "dist/${name}-darwin-amd64" "./${cmd%/}"
-            GOOS=darwin GOARCH=arm64 go build -o "dist/${name}-darwin-arm64" "./${cmd%/}"
+            GOOS=linux  GOARCH=amd64 go build -o "dist/${name}-linux-amd64"       "./${cmd%/}"
+            GOOS=linux  GOARCH=arm64 go build -o "dist/${name}-linux-arm64"       "./${cmd%/}"
+            GOOS=darwin GOARCH=amd64 go build -o "dist/${name}-darwin-amd64"      "./${cmd%/}"
+            GOOS=darwin GOARCH=arm64 go build -o "dist/${name}-darwin-arm64"      "./${cmd%/}"
             GOOS=windows GOARCH=amd64 go build -o "dist/${name}-windows-amd64.exe" "./${cmd%/}"
           done
 
-      - name: Generate release notes
+      - name: Build coach windows amd64 (dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 go build -o "dist/coach-windows-amd64.exe" ./cmd/coach
+
+      - name: Write VERSION manifest
+        run: |
+          cat > dist/VERSION <<'VEOF'
+          commit=${{ github.sha }}
+          event=${{ github.event_name }}
+          go_toolchain=${{ steps.toolchain.outputs.go }}
+          VEOF
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd dist
+          # Write checksums to a temp file first so it doesn't include itself.
+          sha256sum -- * > /tmp/checksums.txt
+          mv /tmp/checksums.txt checksums.txt
+          cat checksums.txt
+
+      - name: Generate release notes (tag)
+        if: github.event_name == 'push'
         id: notes
         run: |
           echo "notes<<EOF" >> $GITHUB_OUTPUT
@@ -39,7 +77,15 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - uses: softprops/action-gh-release@v3
+        if: github.event_name == 'push'
         with:
           files: dist/*
           body: ${{ steps.notes.outputs.notes }}
           generate_release_notes: true
+
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: coach-windows-amd64
+          path: dist/*
+          if-no-files-found: error
