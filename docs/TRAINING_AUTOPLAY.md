@@ -2,13 +2,33 @@
 
 Status: **experimental; not qualified**. Windows training input, a partial rules-backed decision loop, phase navigation and mulligan transitions have been exercised on the target desktop. No uninterrupted complete match has been qualified. The older prototype and measurements below describe their state at the time and are retained as historical evidence.
 
+## Module boundaries (2026-11-03)
+
+Implementation is split across the following files under `internal/observe/`:
+
+| File | Responsibility | Owner |
+|------|---------------|-------|
+| `observed_match.go` | Platform-independent runner logic: `runObservedMatch`, frame pair await, turn loop, identity/play selection, result qualification | runner (play agent) |
+| `observed_match_config.go` | `ObservedMatchConfig`, `LoadObservedMatchConfig`, config validation, safe unit allowlist, OCR name matching (`namedCard`), art guard | config (hand agent) |
+| `observed_match_windows.go` | Windows adapter: `RunObservedMatch`, capture, send, identify (OCR hover), progress, `ExecuteContext` bridge | Windows wiring (this file) |
+| `observed_match_test.go` | Platform-independent runner tests (including OCR identity tests via `matchTestHost`) | runner (play agent) |
+| `observed_hand*.go` | New hand-identity helper `loadObservedHand` (in progress) | hand agent |
+| `observed_play*.go` | New play-selection helper (in progress) | play agent |
+| `observed_preflight*.go` | Preflight validation command and runtime-path checks (in progress) | preflight agent |
+| `cmd/`                   | CLI entry points: `-observed-match`, `preflight-observed`, control session | preflight/Win wiring |
+
+Shared types (`ObservedMatchConfig`, `ObservedPlay`, `ObservedHandConfig`, `ObservedCardName`) remain in `observed_match_config.go`; the config agent may add `loadObservedHand`. No code is duplicated. Independent verification entry: `go test -count=1 ./internal/observe` runs the platform-independent suite; `GOOS=windows GOARCH=amd64 go test -c` compiles the Windows adapter without exercising it. Live Windows qualification requires the actual target desktop and uninterrupted full matches.
+
 ## Constrained observed match runner
 
 `coach.exe -observed-match match.json -out <new-output-directory>` runs one ordinary versus-computer match entirely in the Windows interactive process. The resident host also accepts this file through its existing `-session-config` option; start it once with `coach control run-session` and inspect `control status`, `control receipt`, and `control logs`. The Mac client may inspect logs; all recognition, decisions and inputs run locally on Windows. The existing native rules/session mode remains available separately.
 
-This path uses calibrated UI evidence without constructing a full rules-engine state. It chooses the first unused safe play profile whose `ready` label agrees in two fresh frames and whose card identity agrees at the same calibrated hand slot in both frames. Slot identity uses the existing card-art scanner; other hand slots may remain unknown. The click follows the recognized slot, so a shuffled order does not require an exact whole-hand template. Each profile is consumed once per match. If none is verified, it passes. This is a conservative execution policy, not a competitive strategy or general hand recognizer. A pass-only match is explicitly unqualified. Completion requires a confirmed placement, at least two observed round starts, and two matching result frames; starting on a result screen never qualifies. An optional direct result-to-training exit is separately confirmed.
+This path uses calibrated UI evidence without constructing a full rules-engine state. Card identity follows one of two independent paths:
+- **Art match (standard):** The first unused safe play profile whose `ready` label agrees in two fresh frames and whose card art agrees at the same calibrated hand slot in both frames. Slot identity uses the existing card-art scanner (`internal/observe/hand_scan.go`); other hand slots may remain unknown.
+- **OCR name (Names mode):** Configured tooltip card names (`ObservedCardName`) are matched against Windows OCR output after hovering each slot. This path skips the art scanner and requires `cfg.Hand.Names` to be non-empty with at least two competing names. The hover capture and OCR run in the `identify` callback (`observed_match_windows.go`). Identity is established on the hovered frame and guarded at click time by a lifecycle `turn` re-check and the play model's `ready` label on the refreshed pair.
+The click follows the recognized slot, so a shuffled order does not require an exact whole-hand template. Each profile is consumed once per match. If none is verified, it passes. This is a conservative execution policy, not a competitive strategy or general hand recognizer. A pass-only match is explicitly unqualified. Completion requires a confirmed placement, at least two observed round starts, and two matching result frames; starting on a result screen never qualifies. An optional direct result-to-training exit is separately confirmed.
 
-The fixed allowlist contains units with no deploy target or choice: Pavko Gale (201676), Hawker Smuggler (142315), Antherion (203073), the movement sentry (200039), Naiad Fledgling (203152), and Mahakam Defender (142306).
+The fixed allowlist (`safeObservedUnit` in `observed_match_config.go`) contains units with no deploy target or choice: Pavko Gale (201676), Hawker Smuggler (142315), Antherion (203073), the movement sentry (200039), Naiad Fledgling (203152), Mahakam Defender (142306), deploy-effects-resolve-without-choice cards: Svalblod Priest (203256), Roach (132403), Mahakam Volunteer (200042); and summon/passive-deploy cards: Eskel (112202), Vesemir (112203), Decoy (201559), Blue Stripes Commando (203089).
 
 Pass uses a fixed 1.5-second left-button hold; EndTurn is a plain click. The
 observed-match runner already uses `Action.Kind: "hold"` for pass and `Action.Kind:
