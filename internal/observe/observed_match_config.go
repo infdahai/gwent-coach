@@ -8,9 +8,6 @@ import (
 	"image"
 	"os"
 	"path/filepath"
-
-	"gwentcoachmvp/internal/cardindex"
-	"gwentcoachmvp/internal/cardmatch"
 )
 
 const ObservedMatchKind = "observed-match-v1"
@@ -66,16 +63,28 @@ func LoadObservedMatchConfig(path string) (ObservedMatchConfig, error) {
 	}
 	sum := sha256.Sum256(data)
 	cfg.configSHA256 = hex.EncodeToString(sum[:])
+	// Assets resolve against the local filesystem; a foreign absolute path is
+	// not silently joined onto a local directory and simply fails to load.
 	resolve := func(p string) string {
 		if filepath.IsAbs(p) {
 			return p
 		}
 		return filepath.Join(filepath.Dir(path), p)
 	}
-	if cfg.Kind != ObservedMatchKind || !safeSessionID(cfg.ID) || cfg.DeckID == "" || cfg.StateDir == "" || !filepath.IsAbs(cfg.StopFile) || cfg.TimeoutMS <= 0 || cfg.TransitionTimeoutMS <= 0 || cfg.UnknownTimeoutMS <= 0 || cfg.UnknownTimeoutMS > cfg.TransitionTimeoutMS || len(cfg.Plays) == 0 {
+	// Runtime paths may target the Windows host while the config is inspected on
+	// another OS. Preserve Windows drive/UNC absolute paths literally instead of
+	// treating them as relative to the inspecting machine.
+	resolveRuntime := func(p string) string {
+		if hostAbsolutePath(p) {
+			return p
+		}
+		return filepath.Join(filepath.Dir(path), p)
+	}
+	if cfg.Kind != ObservedMatchKind || !safeSessionID(cfg.ID) || cfg.DeckID == "" || cfg.StateDir == "" || !hostAbsolutePath(cfg.StopFile) || cfg.TimeoutMS <= 0 || cfg.TransitionTimeoutMS <= 0 || cfg.UnknownTimeoutMS <= 0 || cfg.UnknownTimeoutMS > cfg.TransitionTimeoutMS || len(cfg.Plays) == 0 {
 		return cfg, fmt.Errorf("complete observed-match configuration required")
 	}
-	cfg.StateDir, cfg.ModelPath = resolve(cfg.StateDir), resolve(cfg.ModelPath)
+	cfg.StateDir = resolveRuntime(cfg.StateDir)
+	cfg.ModelPath = resolve(cfg.ModelPath)
 	cfg.model, err = loadBoundPhases(cfg.ModelPath, cfg.ModelSHA256)
 	if err != nil {
 		return cfg, err
@@ -106,79 +115,9 @@ func LoadObservedMatchConfig(path string) (ObservedMatchConfig, error) {
 		return cfg, fmt.Errorf("invalid exit point")
 	}
 	h := &cfg.Hand
-	if len(h.Slots) < 1 || len(h.Slots) > 10 || len(h.Clicks) != len(h.Slots) {
-		return cfg, fmt.Errorf("1..10 calibrated hand slots and click points required")
-	}
-	// Art mode guards every slot with a post-hover region. Names mode identifies
-	// by tooltip, so guard boxes are unused and may be omitted; if supplied they
-	// must still be well formed.
-	guard := len(h.Names) == 0
-	if guard {
-		if len(h.GuardSlots) != len(h.Slots) {
-			return cfg, fmt.Errorf("guard slots required for art identification")
-		}
-	} else if len(h.GuardSlots) != 0 && len(h.GuardSlots) != len(h.Slots) {
-		return cfg, fmt.Errorf("guard slots must match hand slots when provided")
-	}
-	if err := (cardmatch.Thresholds{MaxDistance: h.MaxDistance, MinGap: h.MinGap}).Validate(); err != nil {
+	knownIDs, err := loadObservedHand(path, h)
+	if err != nil {
 		return cfg, err
-	}
-	for i, roi := range h.Slots {
-		regions := []cardmatch.ROI{roi}
-		if len(h.GuardSlots) > 0 {
-			regions = append(regions, h.GuardSlots[i])
-		}
-		for _, r := range regions {
-			if r.Width < 9 || r.Height < 8 || !image.Rect(r.X, r.Y, r.X+r.Width, r.Y+r.Height).In(bounds) {
-				return cfg, fmt.Errorf("invalid hand art region")
-			}
-		}
-		if !h.Clicks[i].In(image.Rect(roi.X, roi.Y, roi.X+roi.Width, roi.Y+roi.Height)) {
-			return cfg, fmt.Errorf("hand click must be inside its observed art region")
-		}
-	}
-
-	// Track which card IDs are known through art templates (if loaded) and/or names.
-	knownIDs := map[int]bool{}
-	if len(h.Names) > 0 {
-		// Names mode: validate names against card database. Template loading is
-		// skipped; matcher stays nil.
-		namedIDs, err := loadObservedHand(path, h)
-		if err != nil {
-			return cfg, err
-		}
-		for id := range namedIDs {
-			knownIDs[id] = true
-		}
-	} else {
-		// Art mode: load templates and build the matcher.
-		h.Database, h.Templates = resolve(h.Database), resolve(h.Templates)
-		db, err := cardindex.Open(h.Database, cardindex.Version{Data: cardindex.DataVersion, Rules: cardindex.RulesVersion})
-		if err != nil {
-			return cfg, err
-		}
-		templatesData, err := os.ReadFile(h.Templates)
-		if err != nil {
-			return cfg, err
-		}
-		templateSum := sha256.Sum256(templatesData)
-		if hex.EncodeToString(templateSum[:]) != h.TemplatesSHA256 {
-			return cfg, fmt.Errorf("hand template digest mismatch")
-		}
-		var templates cardmatch.File
-		if err = json.Unmarshal(templatesData, &templates); err != nil {
-			return cfg, err
-		}
-		h.matcher, err = cardmatch.New(templates, db)
-		if err != nil {
-			return cfg, err
-		}
-		for _, template := range templates.Templates {
-			knownIDs[template.CardID] = true
-		}
-		if len(knownIDs) < 2 {
-			return cfg, fmt.Errorf("hand identity requires competing card templates")
-		}
 	}
 
 	seen := map[string]bool{}

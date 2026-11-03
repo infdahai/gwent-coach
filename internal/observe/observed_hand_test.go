@@ -1,8 +1,11 @@
 package observe
 
 import (
+	"image"
 	"strings"
 	"testing"
+
+	"gwentcoachmvp/internal/cardmatch"
 )
 
 // Two whitelisted, non-person cards used by the name tests below.
@@ -76,10 +79,31 @@ func TestLoadObservedMatchConfigArtModeUnchanged(t *testing.T) {
 	})
 }
 
+func TestLoadObservedMatchConfigOCROnlyAcceptsZeroMinGap(t *testing.T) {
+	path, cfg, write := observedConfigFixture(t)
+	cfg.Hand.Names = []ObservedCardName{
+		{Name: "玛 哈 坎 勇 士", CardID: 200042},
+		{Name: "狼群", CardID: 132403},
+	}
+	cfg.Hand.Templates, cfg.Hand.TemplatesSHA256 = "", ""
+	cfg.Hand.GuardSlots = nil
+	cfg.Hand.MaxDistance, cfg.Hand.MinGap = 0, 0
+	cfg.Plays[0].CardID = 200042
+	write("match.json", cfg)
+	if _, err := LoadObservedMatchConfig(path); err != nil {
+		t.Fatalf("OCROnly with MinGap=0 should be accepted: %v", err)
+	}
+}
+
 func TestLoadObservedHandValidatesAgainstLibrary(t *testing.T) {
 	path, _, _ := observedConfigFixture(t)
-	valid := &ObservedHandConfig{Database: "cards.db", Names: handTestNames}
-	ids, err := loadObservedHand(path, valid)
+	baseNames := &ObservedHandConfig{
+		Database: "cards.db",
+		Slots:    []cardmatch.ROI{{X: 450, Y: 900, Width: 100, Height: 100}, {X: 650, Y: 900, Width: 100, Height: 100}},
+		Clicks:   []image.Point{{X: 500, Y: 950}, {X: 700, Y: 950}},
+		Names:    handTestNames,
+	}
+	ids, err := loadObservedHand(path, baseNames)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,12 +111,12 @@ func TestLoadObservedHandValidatesAgainstLibrary(t *testing.T) {
 		t.Fatalf("ids=%v", ids)
 	}
 	for name, h := range map[string]*ObservedHandConfig{
-		"empty-name":       {Database: "cards.db", Names: []ObservedCardName{{Name: "  ", CardID: 200042}, {Name: "狼群", CardID: 132403}}},
-		"duplicate-name":   {Database: "cards.db", Names: []ObservedCardName{{Name: "玛哈坎勇士", CardID: 200042}, {Name: "玛 哈 坎 勇 士", CardID: 132403}}},
-		"duplicate-id":     {Database: "cards.db", Names: []ObservedCardName{{Name: "玛哈坎勇士", CardID: 200042}, {Name: "狼群", CardID: 200042}}},
-		"name-id-mismatch": {Database: "cards.db", Names: []ObservedCardName{{Name: "狼群", CardID: 200042}, {Name: "玛哈坎勇士", CardID: 132403}}},
-		"not-whitelisted":  {Database: "cards.db", Names: []ObservedCardName{{Name: "牛堡学者", CardID: 202218}, {Name: "狼群", CardID: 132403}}},
-		"missing-database": {Database: "missing.db", Names: handTestNames},
+		"empty-name":       {Database: "cards.db", Slots: baseNames.Slots, Clicks: baseNames.Clicks, Names: []ObservedCardName{{Name: "  ", CardID: 200042}, {Name: "狼群", CardID: 132403}}},
+		"duplicate-name":   {Database: "cards.db", Slots: baseNames.Slots, Clicks: baseNames.Clicks, Names: []ObservedCardName{{Name: "玛哈坎勇士", CardID: 200042}, {Name: "玛 哈 坎 勇 士", CardID: 132403}}},
+		"duplicate-id":     {Database: "cards.db", Slots: baseNames.Slots, Clicks: baseNames.Clicks, Names: []ObservedCardName{{Name: "玛哈坎勇士", CardID: 200042}, {Name: "狼群", CardID: 200042}}},
+		"name-id-mismatch": {Database: "cards.db", Slots: baseNames.Slots, Clicks: baseNames.Clicks, Names: []ObservedCardName{{Name: "狼群", CardID: 200042}, {Name: "玛哈坎勇士", CardID: 132403}}},
+		"not-whitelisted":  {Database: "cards.db", Slots: baseNames.Slots, Clicks: baseNames.Clicks, Names: []ObservedCardName{{Name: "牛堡学者", CardID: 202218}, {Name: "狼群", CardID: 132403}}},
+		"missing-database": {Database: "missing.db", Slots: baseNames.Slots, Clicks: baseNames.Clicks, Names: handTestNames},
 	} {
 		if _, err := loadObservedHand(path, h); err == nil {
 			t.Fatalf("%s: accepted invalid names", name)
@@ -124,5 +148,99 @@ func TestNamedCardRejectsAmbiguousOrQuotedOnlyText(t *testing.T) {
 		if got := namedCard(handTestNames, c.text); got != c.want {
 			t.Fatalf("namedCard(%q)=%d want %d", c.text, got, c.want)
 		}
+	}
+}
+
+func TestNamedCardRenfrisGang(t *testing.T) {
+	// 203089 en="Renfri's Gang": the apostrophe must not be treated as a quote.
+	names := []ObservedCardName{
+		{Name: "Renfri's Gang", CardID: 203089},
+		{Name: "狼群", CardID: 132403},
+	}
+	cases := []struct {
+		text string
+		want int
+	}{
+		{"Renfri's Gang", 203089},
+		{"renfri's gang", 203089},
+		{"RENFRI'S GANG", 203089},
+		{"Renfri's Gang 狼群", 0}, // both unquoted => ambiguous
+		{"“Renfri's Gang”", 0},  // fully quoted => rejected
+	}
+	for _, c := range cases {
+		if got := namedCard(names, c.text); got != c.want {
+			t.Fatalf("namedCard(%q)=%d want %d", c.text, got, c.want)
+		}
+	}
+}
+
+func TestNamedCardCaseInsensitive(t *testing.T) {
+	names := []ObservedCardName{
+		{Name: "玛哈坎勇士", CardID: 200042},
+		// "狼群" is all lowercase; test that mixed-case config names also match.
+		{Name: "Wolf Pack", CardID: 132403},
+	}
+	cases := []struct {
+		text string
+		want int
+	}{
+		{"wolf pack", 132403},
+		{"WOLF PACK", 132403},
+		{"Wolf Pack", 132403},
+	}
+	for _, c := range cases {
+		if got := namedCard(names, c.text); got != c.want {
+			t.Fatalf("namedCard(%q)=%d want %d", c.text, got, c.want)
+		}
+	}
+}
+
+func TestHostAbsolutePath(t *testing.T) {
+	cases := map[string]bool{
+		"/tmp/STOP":           true,
+		`D:\gwent\STOP`:       true,
+		`D:/gwent/STOP`:       true,
+		`c:\state`:            true,
+		`\\server\share\STOP`: true,
+		`\\server\share`:      true,
+		`\\server`:            false, // missing share
+		`D:relative`:          false, // drive-relative, not drive-absolute
+		`relative/STOP`:       false,
+		`STOP`:                false,
+		``:                    false,
+	}
+	for p, want := range cases {
+		if got := hostAbsolutePath(p); got != want {
+			t.Fatalf("hostAbsolutePath(%q)=%v want %v", p, got, want)
+		}
+	}
+}
+
+func TestLoadObservedMatchConfigWindowsPathsPreserved(t *testing.T) {
+	path, cfg, write := observedConfigFixture(t)
+	cfg.StopFile = `D:\gwent\STOP`
+	cfg.StateDir = `D:\gwent\state`
+	write("match.json", cfg)
+
+	loaded, err := LoadObservedMatchConfig(path)
+	if err != nil {
+		t.Fatalf("Mac loader rejected a Windows target's absolute StopFile/StateDir: %v", err)
+	}
+	// Foreign absolute paths must stay literal rather than being joined onto a
+	// local directory.
+	if loaded.StopFile != `D:\gwent\STOP` {
+		t.Fatalf("StopFile rewritten: %q", loaded.StopFile)
+	}
+	if loaded.StateDir != `D:\gwent\state` {
+		t.Fatalf("StateDir rewritten: %q", loaded.StateDir)
+	}
+}
+
+func TestLoadObservedMatchConfigRejectsRelativeStop(t *testing.T) {
+	path, cfg, write := observedConfigFixture(t)
+	cfg.StopFile = "STOP"
+	write("match.json", cfg)
+	if _, err := LoadObservedMatchConfig(path); err == nil {
+		t.Fatal("accepted relative StopFile")
 	}
 }
