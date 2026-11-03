@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # L1 — static checks: formatting, vet and compilation.
+  l1-static:
+    name: L1 Static
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+  # L2 — unit tests that do not need the local card snapshots.
+  l2-unit:
+    name: L2 Unit (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Select packages without card-snapshot dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          data_packages="$RUNNER_TEMP/data-packages.txt"
+          grep -rl --include='*_test.go' 'data/cards/' . \
+            | sed -e 's#/[^/]*$##' -e 's#^\./##' -e 's#^#./#' \
+            | sort -u | xargs -n1 go list > "$data_packages"
+          echo "Data-dependent packages (excluded from L2):"
+          cat "$data_packages"
+          go list ./... | grep -vxF -f "$data_packages" > "$RUNNER_TEMP/packages.txt"
+          echo "L2 selected $(wc -l < "$RUNNER_TEMP/packages.txt") packages."
+
+      - name: go test
+        shell: bash
+        run: go test -shuffle=on -count=1 -timeout=300s $(cat "$RUNNER_TEMP/packages.txt")
+
+  # L3 — integration tests. Card snapshots are not distributed, so this layer
+  # runs only when the repository supplies download URLs as secrets.
+  l3-integration:
+    name: L3 Integration
+    needs: detect-cards
+    if: needs.detect-cards.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Materialize card snapshots
+        env:
+          CARDS_EN_URL: ${{ secrets.GWENT_CARDS_EN_URL }}
+          CARDS_CN_URL: ${{ secrets.GWENT_CARDS_CN_URL }}
+          CARDS_AUTH: ${{ secrets.GWENT_CARDS_AUTH }}
+        run: |
+          set -euo pipefail
+          mkdir -p data/cards/14.10.0/en data/cards/14.10.0/cn
+          auth=()
+          if [ -n "${CARDS_AUTH:-}" ]; then
+            auth=(-H "Authorization: $CARDS_AUTH")
+          fi
+          curl -fsSL --retry 3 "${auth[@]}" "$CARDS_EN_URL" -o data/cards/14.10.0/en/cards.json
+          curl -fsSL --retry 3 "${auth[@]}" "$CARDS_CN_URL" -o data/cards/14.10.0/cn/cards.json
+          go run ./cmd/carddb -db data/cards/14.10.0/en/cards.json -query 152405 > /dev/null
+
+      - name: go test
+        run: go test -shuffle=on -count=1 -timeout=600s ./...
+
+  detect-cards:
+    name: L3 Card snapshot detection
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - id: check
+        env:
+          CARDS_EN_URL: ${{ secrets.GWENT_CARDS_EN_URL }}
+          CARDS_CN_URL: ${{ secrets.GWENT_CARDS_CN_URL }}
+        run: |
+          if [ -n "$CARDS_EN_URL" ] && [ -n "$CARDS_CN_URL" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=L3 skipped::Card snapshots unavailable. Add GWENT_CARDS_EN_URL and GWENT_CARDS_CN_URL repository secrets to enable integration tests."
+          fi
+
+  # L4 — cross-platform compilation and vet. Windows is the runtime target,
+  # so every supported GOOS/GOARCH must type-check and build.
+  l4-cross-platform:
+    name: L4 Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...

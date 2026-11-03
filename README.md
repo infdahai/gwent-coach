@@ -1,5 +1,7 @@
 # Gwent Coach
 
+[![CI](https://github.com/infdahai/gwent-coach/actions/workflows/ci.yml/badge.svg)](https://github.com/infdahai/gwent-coach/actions/workflows/ci.yml)
+
 Go observation prototype and versioned card catalog for Gwent research. This project is not an autonomous player. Windows observation/input tooling requires a local interactive game session; no game account, remote host or credentials are configured by this repository.
 
 Card snapshots are **not distributed**. See [card data setup](data/cards/README.md) before running catalog commands or integration tests. Game text and artwork rights remain with their owners; public API availability does not establish redistribution permission.
@@ -16,6 +18,19 @@ go run ./cmd/rules -mode coverage > /tmp/gwent-coverage.json
 go run ./cmd/rules -mode demo > /tmp/gwent-demo.json
 go run ./cmd/rules -mode replay -input /tmp/gwent-demo.json
 ```
+
+## Testing and CI
+
+GitHub Actions runs four layers on every push and pull request:
+
+| Layer | Scope | Runs when |
+|-------|-------|-----------|
+| L1 Static | `gofmt`, `go vet ./...`, `go build ./...` | always |
+| L2 Unit | Tests that do not read `data/cards/` (Linux and macOS) | always |
+| L3 Integration | Full `go test ./...`, requiring the card snapshots | only when snapshots are configured |
+| L4 Cross-platform | `go build`/`go vet` for windows/amd64, linux/amd64+arm64, darwin/amd64+arm64 | always |
+
+L3 is skipped on the public repository because the snapshots are not distributed. To enable it, store the download URLs as the repository secrets `GWENT_CARDS_EN_URL` and `GWENT_CARDS_CN_URL` (with optional `GWENT_CARDS_AUTH` for an `Authorization` header); the workflow writes them to `data/cards/14.10.0/{en,cn}/cards.json` and validates one card before testing. Pushing a `v*` tag cross-compiles every `cmd/*` binary and publishes a GitHub Release.
 
 The pure Go `native-v1` offline engine implements six pinned card abilities, armor/damage/boost/death, atomic actions, Pass, resource retention, match settlement, deterministic JSON replay and a prediction/confirmation adapter. All 1,381 local catalog entries appear in the coverage report; 1,375 are explicitly unsupported and rejected by the simulator.
 
