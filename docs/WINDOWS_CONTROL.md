@@ -163,6 +163,12 @@ what you intended. `partial_or_unknown`, cursor motion, and failed receipts must
 be reconciled using the screen and logs. The CLI exits nonzero for failed/rejected
 capture or click. Session semantic results remain in the native session journals.
 
+Persisted input `intent` and `delivered_unconfirmed` receipts are not semantic
+postcondition confirmation. Pre-input captures or phase histograms are
+pre-action observations; they do not establish reconciliation or authorize
+releasing a game interlock. Historical evidence of an unresolved action remains
+unresolved until separately reconciled.
+
 **On timeout, disconnect, or unreadable response, do not submit another click or
 session.** Query the original ID with `receipt`, then `status` and `logs`. The
 client never retries mutations; capture/click waiting polls receipts only. If a
