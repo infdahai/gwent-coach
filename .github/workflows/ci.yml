@@ -74,7 +74,7 @@ jobs:
         run: go test -shuffle=on -count=1 -timeout=300s $(cat "$RUNNER_TEMP/packages.txt")
 
   # L3 — integration tests. Card snapshots are not distributed, so this layer
-  # runs only when the repository supplies them as base64 secrets.
+  # runs only when the repository supplies download URLs as secrets.
   l3-integration:
     name: L3 Integration
     needs: detect-cards
