@@ -101,6 +101,13 @@ func capture(t *testing.T, c *Client) Receipt {
 	return await(t, c, submit(t, c, "capture").ID)
 }
 
+func assertIntent(t *testing.T, r Receipt, reference string, x, y int) {
+	t.Helper()
+	if r.Intent == nil || r.Intent.Reference != reference || r.Intent.X != x || r.Intent.Y != y {
+		t.Fatalf("intent %+v, want reference=%q x=%d y=%d", r.Intent, reference, x, y)
+	}
+}
+
 func TestAuthenticationAndBrowserIsolation(t *testing.T) {
 	h, _ := setup(t, &fakeBackend{})
 	for _, tc := range []struct {
@@ -217,12 +224,14 @@ func TestClickIsSingleUseAndDuplicateNeverExecutes(t *testing.T) {
 	if r.Input == nil || r.Input.Outcome != "delivered_unconfirmed" {
 		t.Fatalf("receipt %+v", r)
 	}
+	assertIntent(t, r, ref.Reference, 5, 6)
 	// Changing the body under an existing ID also cannot execute anything.
-	cmd.Kind = "run-session"
+	cmd.Kind, cmd.X, cmd.Y = "run-session", 9, 10
 	duplicate, err := c.Submit(context.Background(), cmd)
 	if err == nil || duplicate.Command != "click" || duplicate.State != "completed" {
 		t.Fatalf("duplicate %+v %v", duplicate, err)
 	}
+	assertIntent(t, duplicate, ref.Reference, 5, 6)
 	cmd.ID, cmd.Kind = NewID(), "click"
 	if _, err := c.Submit(context.Background(), cmd); err == nil {
 		t.Fatal("reused capture")
@@ -232,6 +241,99 @@ func TestClickIsSingleUseAndDuplicateNeverExecutes(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(h.cfg.Root, "captures", ref.Reference+".input-used")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInputIntentDurableClaimPrecedesExecution(t *testing.T) {
+	for _, kind := range []string{"click", "hold"} {
+		t.Run(kind, func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			b := &fakeBackend{click: func(ctx context.Context) (desktop.Receipt, error) {
+				close(started)
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+				return desktop.Receipt{Outcome: "delivered_unconfirmed", EventsSent: 2}, nil
+			}}
+			h, c := setup(t, b)
+			t.Cleanup(func() { once.Do(func() { close(release) }) })
+			ref := capture(t, c)
+			cmd := Command{ID: NewID(), Kind: kind, Reference: ref.Reference, X: 0, Y: 0}
+			accepted, err := c.Submit(context.Background(), cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertIntent(t, accepted, ref.Reference, 0, 0)
+			<-started
+
+			data, err := os.ReadFile(h.requestPath(cmd.ID, ".claim.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var claim Receipt
+			if err := json.Unmarshal(data, &claim); err != nil {
+				t.Fatal(err)
+			}
+			if claim.State != "accepted" {
+				t.Fatalf("claim state %q", claim.State)
+			}
+			assertIntent(t, claim, ref.Reference, 0, 0)
+			if !strings.Contains(string(data), `"x":0`) || !strings.Contains(string(data), `"y":0`) {
+				t.Fatalf("zero coordinates lost in claim: %s", data)
+			}
+
+			pending, err := c.Receipt(context.Background(), cmd.ID)
+			if err != nil || pending.State != "accepted" {
+				t.Fatalf("pending receipt %+v %v", pending, err)
+			}
+			assertIntent(t, pending, ref.Reference, 0, 0)
+
+			once.Do(func() { close(release) })
+			done := await(t, c, cmd.ID)
+			if done.State != "completed" {
+				t.Fatalf("completion %+v", done)
+			}
+			assertIntent(t, done, ref.Reference, 0, 0)
+			if kind == "click" && b.clicks.Load() != 1 || kind == "hold" && b.holds.Load() != 1 {
+				t.Fatal("unexpected backend dispatch")
+			}
+		})
+	}
+}
+
+func TestInputIntentPreservedOnRejection(t *testing.T) {
+	_, c := setup(t, &fakeBackend{})
+	ref := capture(t, c)
+	cmd := Command{ID: NewID(), Kind: "hold", Reference: ref.Reference, X: 100, Y: 0}
+	r, err := c.Submit(context.Background(), cmd)
+	if err == nil || r.State != "rejected" {
+		t.Fatalf("rejection %+v %v", r, err)
+	}
+	assertIntent(t, r, ref.Reference, 100, 0)
+	persisted, err := c.Receipt(context.Background(), cmd.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertIntent(t, persisted, ref.Reference, 100, 0)
+}
+
+func TestLegacyReceiptWithoutInputIntent(t *testing.T) {
+	const legacy = `{"id":"0123456789abcdef0123456789abcdef","command":"click","state":"completed","at":"2024-01-02T03:04:05Z"}`
+	var r Receipt
+	if err := json.Unmarshal([]byte(legacy), &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Intent != nil {
+		t.Fatalf("legacy receipt has intent %+v", r.Intent)
+	}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "intent") {
+		t.Fatalf("legacy receipt gained intent: %s", data)
 	}
 }
 
@@ -311,6 +413,7 @@ func TestErrorReceiptPreservesPartialDelivery(t *testing.T) {
 	if r.State != "failed" || r.Input.EventsSent != 1 || r.Input.Outcome != "partial_or_unknown" || r.Error != "delivery failed" {
 		t.Fatalf("lost outcome %+v", r)
 	}
+	assertIntent(t, r, ref.Reference, 2, 3)
 }
 
 func TestRequestClaimsSurviveRestart(t *testing.T) {
@@ -326,9 +429,15 @@ func TestRequestClaimsSurviveRestart(t *testing.T) {
 	}
 	s := httptest.NewServer(h)
 	c, _ := NewClient(s.URL, testToken)
+	ref := capture(t, c)
+	click := Command{ID: NewID(), Kind: "click", Reference: ref.Reference, X: 0, Y: 7}
+	if _, err := c.Submit(context.Background(), click); err != nil {
+		t.Fatal(err)
+	}
+	await(t, c, click.ID)
 	r := await(t, c, submit(t, c, "run-session").ID)
 	// A claim without a result represents a crash/ambiguous completion.
-	uncertain := Receipt{ID: NewID(), Command: "click", State: "accepted"}
+	uncertain := Receipt{ID: NewID(), Command: "click", State: "accepted", Intent: &InputIntent{Reference: NewID(), X: 0, Y: 6}}
 	data, _ := json.Marshal(uncertain)
 	if err := writeExclusive(h.requestPath(uncertain.ID, ".claim.json"), data); err != nil {
 		t.Fatal(err)
@@ -345,12 +454,22 @@ func TestRequestClaimsSurviveRestart(t *testing.T) {
 	s = httptest.NewServer(h)
 	defer s.Close()
 	c, _ = NewClient(s.URL, testToken)
-	for _, id := range []string{r.ID, uncertain.ID} {
-		if _, err = c.Submit(context.Background(), Command{ID: id, Kind: "run-session"}); err == nil {
+	for _, id := range []string{r.ID, click.ID, uncertain.ID} {
+		prior, submitErr := c.Submit(context.Background(), Command{ID: id, Kind: "run-session", X: 9, Y: 10})
+		if submitErr == nil {
 			t.Fatal("replayed persisted ID")
 		}
+		switch id {
+		case click.ID:
+			if prior.State != "completed" {
+				t.Fatalf("restarted result %+v", prior)
+			}
+			assertIntent(t, prior, ref.Reference, 0, 7)
+		case uncertain.ID:
+			assertIntent(t, prior, uncertain.Intent.Reference, 0, 6)
+		}
 	}
-	if b.runs.Load() != 1 {
+	if b.runs.Load() != 1 || b.clicks.Load() != 1 {
 		t.Fatal("restart replayed command")
 	}
 }
