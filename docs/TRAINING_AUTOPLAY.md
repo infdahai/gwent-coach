@@ -9,16 +9,35 @@ Implementation is split across the following files under `internal/observe/`:
 | File | Responsibility | Owner |
 |------|---------------|-------|
 | `observed_match.go` | Platform-independent runner logic: `runObservedMatch`, frame pair await, turn loop, identity/play selection, result qualification | runner (play agent) |
-| `observed_match_config.go` | `ObservedMatchConfig`, `LoadObservedMatchConfig`, config validation, safe unit allowlist, OCR name matching (`namedCard`), art guard | config (hand agent) |
+| `observed_match_config.go` | `ObservedMatchConfig`, `LoadObservedMatchConfig`, config validation, safe unit allowlist ("fixed allowlist" section below), OCR name matching (`namedCard`), art guard | config (hand agent) |
 | `observed_match_windows.go` | Windows adapter: `RunObservedMatch`, capture, send, identify (OCR hover), progress, `ExecuteContext` bridge | Windows wiring (this file) |
-| `observed_identity_guard*.go` | Click-time OCR identity guard for named selects; injectable OCR so Mac tests cover the logic | Windows wiring (this file) |
+| `observed_identity_guard*.go` | Click-time OCR identity guard for named selects (run-time fresh-frame re-verification); injectable OCR so Mac tests cover the logic | Windows wiring (this file) |
 | `observed_match_test.go` | Platform-independent runner tests (including OCR identity tests via `matchTestHost`) | runner (play agent) |
-| `observed_hand*.go` | New hand-identity helper `loadObservedHand` (in progress) | hand agent |
-| `observed_play*.go` | New play-selection helper (in progress) | play agent |
-| `observed_preflight*.go` | Preflight validation command and runtime-path checks (in progress) | preflight agent |
-| `cmd/`                   | CLI entry points: `-observed-match`, `preflight-observed`, control session | preflight/Win wiring |
+| `observed_hand*.go` | `loadObservedHand` helper: hand-identity loader for both art-templates and tooltip name modes, geometry validation, DB-backed name resolution, `safeObservedUnit` | hand agent |
+| `observed_play_txn*.go` | `ObservedPlayTxn`: single card-play transaction extracted from lifecycle, preserving two-frame evidence check and pass/mulligan/result qualification | play agent |
+| `observed_preflight*.go` | `PreflightObservedMatch`: read-only offline preflight validation, resource connectivity check, result coverage report | preflight agent |
+| `cmd/` | CLI entry points: `-observed-match`, `preflight-observed`, control session | preflight/Win wiring |
 
-Shared types (`ObservedMatchConfig`, `ObservedPlay`, `ObservedHandConfig`, `ObservedCardName`) remain in `observed_match_config.go`; the config agent may add `loadObservedHand`. No code is duplicated. Independent verification entry: `go test -count=1 ./internal/observe` runs the platform-independent suite; `GOOS=windows GOARCH=amd64 go test -c` compiles the Windows adapter without exercising it. Live Windows qualification requires the actual target desktop and uninterrupted full matches.
+Shared types (`ObservedMatchConfig`, `ObservedPlay`, `ObservedHandConfig`, `ObservedCardName`) remain in `observed_match_config.go`; the hand loader (`loadObservedHand`) resolves the database and template assets. No code is duplicated. Independent verification entry: `go test -count=1 ./internal/observe` runs the platform-independent suite; `GOOS=windows GOARCH=amd64 go build ./internal/... ./cmd/...` cross-compiles. Live Windows qualification requires the actual target desktop and uninterrupted full matches.
+
+## Offline preflight-observed
+
+`coach preflight-observed <match.json>` validates an observed-match configuration against real local assets without starting Windows or sending any input. It always produces a complete JSON report:
+
+- **LoadResult**: `"ok"` when every required asset resolves and validates on this host; otherwise the loader's exact error.
+- **ResourcesReady**: true only when `LoadResult == "ok"` **and** the lifecycle model covers all three result phases (victory, defeat, draw).
+- **Result coverage**: individually reports victory/defeat/draw presence in the lifecycle model.
+- **Asset classification**: each referenced path is reported with its class (`host-absolute`, `relative`, `foreign-absolute`, `runtime-path`). STOP and StateDir are runtime paths that normally do not exist before a run, classified as `runtime-path` with no existence error.
+- **Hand validation**: in art mode, the database and template index must both be valid; in names mode, each name must resolve against the DB.
+- **Play validation**: each play model must bind its BoardROI across all phase variants.
+
+Nonzero exit means blocking deficiencies. The config must still be validated independently for actual deployment; the preflight does not exercise Windows capture, input, or OCR latency.
+
+To run against real assets on Mac:
+
+```sh
+coach preflight-observed /private/tmp/gwent-preflight-*/match.json > report.json
+```
 
 ## Constrained observed match runner
 
@@ -29,7 +48,7 @@ This path uses calibrated UI evidence without constructing a full rules-engine s
 - **OCR name (Names mode):** Configured tooltip card names (`ObservedCardName`) are matched against Windows OCR output after hovering each slot. This path skips the art scanner and requires `cfg.Hand.Names` to be non-empty with at least two competing names. The hover capture and OCR run in the `identify` callback (`observed_match_windows.go`). Identity is established on the hovered frame, and immediately before the select click the adapter captures the fresh guard frame (the cursor remains on the card at its click point), writes it to one transient PNG under the private run directory, re-runs OCR, and requires `namedCard` to resolve to the play profile's `CardID` (`guardNamedCardFrame` in `observed_identity_guard.go`). A different name, OCR failure, write/cleanup failure, lifecycle `turn` change or play-model `ready` change refuses the click; the original two-second input deadline is not extended, so slow OCR rejects rather than skips identity. This click-time OCR guard has not been measured live on Windows.
 The click follows the recognized slot, so a shuffled order does not require an exact whole-hand template. Each profile is consumed once per match. If none is verified, it passes. This is a conservative execution policy, not a competitive strategy or general hand recognizer. A pass-only match is explicitly unqualified. Completion requires a confirmed placement, at least two observed round starts, and two matching result frames; starting on a result screen never qualifies. An optional direct result-to-training exit is separately confirmed.
 
-The fixed allowlist (`safeObservedUnit` in `observed_match_config.go`) contains units with no deploy target or choice: Pavko Gale (201676), Hawker Smuggler (142315), Antherion (203073), the movement sentry (200039), Naiad Fledgling (203152), Mahakam Defender (142306), deploy-effects-resolve-without-choice cards: Svalblod Priest (203256), Roach (132403), Mahakam Volunteer (200042); and summon/passive-deploy cards: Eskel (112202), Vesemir (112203), Decoy (201559), Blue Stripes Commando (203089).
+The fixed allowlist (`safeObservedUnit` in `observed_hand.go`) contains units with no deploy target or choice: Pavko Gale (201676), Hawker Smuggler (142315), Antherion (203073), the movement sentry (200039), Naiad Fledgling (203152), Mahakam Defender (142306); deploy-effects-resolve-without-choice cards: Svalblod Priest (203256), Roach (132403), Mahakam Volunteer (200042); and summon/passive-deploy cards: Eskel (112202), Vesemir (112203), Decoy (201559), Blue Stripes Commando (203089). This list is owned by the hand agent in `observed_hand.go`; re-audit if the game's card definitions change.
 
 Pass uses a fixed 1.5-second left-button hold; EndTurn is a plain click. The
 observed-match runner already uses `Action.Kind: "hold"` for pass and `Action.Kind:

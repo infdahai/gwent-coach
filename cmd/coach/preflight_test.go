@@ -100,9 +100,9 @@ func preflightCLIFixture(t *testing.T) (string, *cliConfig, func(string, any) st
 		ConfirmMulligan: cliPoint{892, 635}, Pass: cliPoint{1845, 540}, EndTurn: cliPoint{1845, 540},
 		Hand: cliHand{
 			Database: "cards.db", Templates: "templates.json",
-			Slots:      []cliROI{{450, 900, 100, 100}, {650, 900, 100, 100}},
-			GuardSlots: []cliROI{{450, 900, 100, 100}, {650, 900, 100, 100}},
-			Clicks:     []cliPoint{{500, 980}, {700, 980}},
+			Slots:       []cliROI{{450, 900, 100, 100}, {650, 900, 100, 100}},
+			GuardSlots:  []cliROI{{450, 900, 100, 100}, {650, 900, 100, 100}},
+			Clicks:      []cliPoint{{500, 980}, {700, 980}},
 			MaxDistance: 0, MinGap: 1,
 		},
 		Plays: []cliPlay{{

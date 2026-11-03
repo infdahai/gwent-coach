@@ -61,12 +61,12 @@ type PreflightHand struct {
 }
 
 type PlayPreflight struct {
-	ID              string   `json:"id"`
-	CardID          int      `json:"card_id"`
-	ModelPath       string   `json:"model_path"`
-	ModelValid      string   `json:"model_valid,omitempty"`
-	Phases          []string `json:"phases,omitempty"`
-	BoardROI        string   `json:"board_roi,omitempty"`
+	ID         string   `json:"id"`
+	CardID     int      `json:"card_id"`
+	ModelPath  string   `json:"model_path"`
+	ModelValid string   `json:"model_valid,omitempty"`
+	Phases     []string `json:"phases,omitempty"`
+	BoardROI   string   `json:"board_roi,omitempty"`
 }
 
 type AssetPathInfo struct {
@@ -278,10 +278,11 @@ func diagnosePreflight(r *PreflightReport, path string) {
 
 // classifyAssetPaths records whether each referenced path is host-absolute,
 // Windows-absolute on this host, or relative, and never claims existence for
-// paths the host cannot access.
+// paths the host cannot access. Runtime paths (STOP, StateDir) are normally
+// absent before a run, so they are classified without an existence error.
 func classifyAssetPaths(r *PreflightReport, cfg ObservedMatchConfig) {
 	dir := filepath.Dir(r.ConfigPath)
-	add := func(key, p string) {
+	add := func(key, p string, runtimePath bool) {
 		if p == "" {
 			return
 		}
@@ -291,6 +292,11 @@ func classifyAssetPaths(r *PreflightReport, cfg ObservedMatchConfig) {
 			// Windows drive/UNC absolute: foreign to this host.
 			info.Class = "foreign-absolute"
 			info.Error = "Windows path syntax; existence not checked on this host"
+		case runtimePath:
+			info.Class = "runtime-path"
+			if !filepath.IsAbs(p) {
+				info.Path = filepath.Join(dir, p)
+			}
 		case filepath.IsAbs(p):
 			info.Class = "host-absolute"
 			info.ExistsHere = pathExists(p)
@@ -307,15 +313,15 @@ func classifyAssetPaths(r *PreflightReport, cfg ObservedMatchConfig) {
 		}
 		r.AssetPaths = append(r.AssetPaths, info)
 	}
-	add("model", cfg.ModelPath)
-	add("stop_file", cfg.StopFile)
-	add("state_dir", cfg.StateDir)
-	add("hand_database", cfg.Hand.Database)
+	add("model", cfg.ModelPath, false)
+	add("stop_file", cfg.StopFile, true)
+	add("state_dir", cfg.StateDir, true)
+	add("hand_database", cfg.Hand.Database, false)
 	if len(cfg.Hand.Names) == 0 {
-		add("hand_templates", cfg.Hand.Templates)
+		add("hand_templates", cfg.Hand.Templates, false)
 	}
 	for i, p := range cfg.Plays {
-		add(fmt.Sprintf("play[%d]_model", i), p.ModelPath)
+		add(fmt.Sprintf("play[%d]_model", i), p.ModelPath, false)
 	}
 }
 

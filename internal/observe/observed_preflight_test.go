@@ -157,6 +157,32 @@ func TestPreflightForeignRuntimePathClassification(t *testing.T) {
 	}
 }
 
+func TestPreflightRuntimePathsAreNotMissingAssets(t *testing.T) {
+	// STOP and StateDir normally do not exist before a run; reporting them as
+	// missing assets would falsely imply a broken configuration.
+	path, _, _ := completeObservedFixture(t)
+	r := PreflightObservedMatch(path)
+	if r.LoadResult != "ok" {
+		t.Fatalf("load result: %s", r.LoadResult)
+	}
+	found := map[string]bool{}
+	for _, ap := range r.AssetPaths {
+		if ap.Key != "stop_file" && ap.Key != "state_dir" {
+			continue
+		}
+		found[ap.Key] = true
+		if ap.Class != "runtime-path" {
+			t.Fatalf("%s class=%q, want runtime-path", ap.Key, ap.Class)
+		}
+		if ap.Error != "" {
+			t.Fatalf("%s reported error: %s", ap.Key, ap.Error)
+		}
+	}
+	if !found["stop_file"] || !found["state_dir"] {
+		t.Fatalf("runtime paths not classified: %+v", r.AssetPaths)
+	}
+}
+
 func TestPreflightDoesNotCreateFiles(t *testing.T) {
 	path, _, _ := completeObservedFixture(t)
 	dir := filepath.Dir(path)
