@@ -116,7 +116,7 @@ func RunObservedMatch(ctx context.Context, out string, logger *log.Logger, cfg O
 			}
 		}
 		frame.Phase, frame.Scores = cfg.model.Recognize(img)
-		if frame.Phase == "turn" {
+		if frame.Phase == "turn" && len(cfg.Hand.Names) == 0 {
 			frame.Hand, err = scanHandFrame(cfg.Hand.scanConfig(false), cfg.Hand.matcher, img, true)
 			if err != nil {
 				return observedMatchFrame{}, err
@@ -139,10 +139,14 @@ func RunObservedMatch(ctx context.Context, out string, logger *log.Logger, cfg O
 				}
 				found = true
 				a.PhaseModel, a.phaseModel, a.ExpectedPhase = p.ModelPath, p.model, frame.Plays[p.ID]
-				if input.Name == "select_card" && !input.Identified {
-					a.extraPhaseModel, a.extraExpectedPhase = cfg.model, "turn"
-					cardID := p.CardID
-					a.imageGuard = func(img image.Image) error { return guardObservedCard(img, cfg.Hand, input.Slot, cardID) }
+				if input.Name == "select_card" {
+					if !input.Identified {
+						a.extraPhaseModel, a.extraExpectedPhase = cfg.model, "turn"
+						cardID := p.CardID
+						a.imageGuard = func(img image.Image) error { return guardObservedCard(img, cfg.Hand, input.Slot, cardID) }
+					} else {
+						a.extraPhaseModel, a.extraExpectedPhase = cfg.model, "turn"
+					}
 				}
 			}
 			if !found {
