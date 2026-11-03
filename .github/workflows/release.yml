@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          for cmd in cmd/*/; do
+            name=$(basename "$cmd")
+            GOOS=linux GOARCH=amd64 go build -o "dist/${name}-linux-amd64" "./${cmd%/}"
+            GOOS=linux GOARCH=arm64 go build -o "dist/${name}-linux-arm64" "./${cmd%/}"
+            GOOS=darwin GOARCH=amd64 go build -o "dist/${name}-darwin-amd64" "./${cmd%/}"
+            GOOS=darwin GOARCH=arm64 go build -o "dist/${name}-darwin-arm64" "./${cmd%/}"
+            GOOS=windows GOARCH=amd64 go build -o "dist/${name}-windows-amd64.exe" "./${cmd%/}"
+          done
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "## Gwent Coach ${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          echo >> $GITHUB_OUTPUT
+          echo "Binaries for all platforms. See the [repository](https://github.com/infdahai/gwent-coach) for changelog and documentation." >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body: ${{ steps.notes.outputs.notes }}
+          generate_release_notes: true
