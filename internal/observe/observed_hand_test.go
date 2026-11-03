@@ -2,6 +2,8 @@ package observe
 
 import (
 	"image"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -195,9 +197,32 @@ func TestNamedCardCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestNamedCardQuotedReferences(t *testing.T) {
+	names := []ObservedCardName{
+		{Name: "Wolf Pack", CardID: 132403},
+		{Name: "Renfri's Gang", CardID: 203089},
+	}
+	cases := []struct {
+		text string
+		want int
+	}{
+		{"Create 'Wolf Pack'", 0},                     // quoted reference only
+		{"'Renfri's Gang'", 0},                        // quoted name with apostrophe
+		{"Wolf Pack  Create 'Renfri's Gang'", 132403}, // hovered title plus quoted reference
+		{"Renfri's Gang", 203089},                     // the title itself stays identifiable
+		{"Create 'Wolf Pack' Renfri's Gang", 203089},  // unquoted title wins over quoted text
+		{"'Wolf Pack' 'Renfri's Gang'", 0},            // multiple quoted references
+		{"Wolf Pack Create 'Renfri's Gang'", 132403},  // quoted reference remains excluded
+	}
+	for _, c := range cases {
+		if got := namedCard(names, c.text); got != c.want {
+			t.Fatalf("namedCard(%q)=%d want %d", c.text, got, c.want)
+		}
+	}
+}
+
 func TestHostAbsolutePath(t *testing.T) {
 	cases := map[string]bool{
-		"/tmp/STOP":           true,
 		`D:\gwent\STOP`:       true,
 		`D:/gwent/STOP`:       true,
 		`c:\state`:            true,
@@ -209,9 +234,29 @@ func TestHostAbsolutePath(t *testing.T) {
 		`STOP`:                false,
 		``:                    false,
 	}
+	if runtime.GOOS == "windows" {
+		// Native Windows semantics only: root-relative slash paths are not
+		// absolute and must not be accepted as STOP/StateDir locations.
+		cases["/tmp/STOP"] = false
+		cases[`\tmp\STOP`] = false
+		cases[`\\server\share`] = filepath.IsAbs(`\\server\share`)
+	} else {
+		cases["/tmp/STOP"] = true
+	}
 	for p, want := range cases {
 		if got := hostAbsolutePath(p); got != want {
 			t.Fatalf("hostAbsolutePath(%q)=%v want %v", p, got, want)
+		}
+	}
+}
+
+func TestHostAbsolutePathWindowsSemantics(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows filepath.IsAbs semantics")
+	}
+	for _, p := range []string{"/tmp/STOP", `\tmp\STOP`, `D:\gwent\STOP`, `\\server\share\STOP`, "relative"} {
+		if got, want := hostAbsolutePath(p), filepath.IsAbs(p); got != want {
+			t.Fatalf("hostAbsolutePath(%q)=%v want native %v", p, got, want)
 		}
 	}
 }
@@ -242,5 +287,21 @@ func TestLoadObservedMatchConfigRejectsRelativeStop(t *testing.T) {
 	write("match.json", cfg)
 	if _, err := LoadObservedMatchConfig(path); err == nil {
 		t.Fatal("accepted relative StopFile")
+	}
+}
+
+func TestLoadObservedMatchConfigWindowsRejectsRootRelativeStop(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows native path semantics")
+	}
+	// A drive-less root-relative path is not an absolute Windows path, so it
+	// must not be accepted for STOP (or a StateDir on another drive).
+	for _, stop := range []string{"/tmp/STOP", `\tmp\STOP`} {
+		path, cfg, write := observedConfigFixture(t)
+		cfg.StopFile = stop
+		write("match.json", cfg)
+		if _, err := LoadObservedMatchConfig(path); err == nil {
+			t.Fatalf("accepted non-native absolute StopFile %q", stop)
+		}
 	}
 }

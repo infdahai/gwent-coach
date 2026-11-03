@@ -1,11 +1,14 @@
 package observe
 
 import (
+	"encoding/json"
 	"image"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gwentcoachmvp/internal/cardmatch"
 )
 
 // completeObservedFixture extends observedConfigFixture's lifecycle model so
@@ -49,7 +52,7 @@ func TestPreflightValidCompleteConfig(t *testing.T) {
 	if r.Hand.NamesMode {
 		t.Fatal("fixture is art mode")
 	}
-	if r.Hand.DBValid != "ok" || r.Hand.TmplValid != "ok" {
+	if r.Hand.DBValid != "ok" || r.Hand.TmplValid != "ok" || r.Hand.Valid != "ok" {
 		t.Fatalf("hand: %+v", r.Hand)
 	}
 }
@@ -125,8 +128,88 @@ func TestPreflightInvalidNames(t *testing.T) {
 	if !strings.Contains(r.LoadResult, "does not match") && !strings.Contains(r.LoadResult, "competing") {
 		t.Fatalf("unexpected error: %s", r.LoadResult)
 	}
+	if r.Hand.Valid == "ok" || !strings.Contains(r.Hand.Valid, "does not match") {
+		t.Fatalf("hand report must carry the loader error, got %q", r.Hand.Valid)
+	}
 	if PreflightCheckResult(r) == "ok" {
 		t.Fatal("expected blocking")
+	}
+}
+
+// TestPreflightReportsRuntimeRejectedTemplates covers templates that pass the
+// old shallow checks (digest, JSON shape, count) but that the runtime loader
+// rejects. The report must not claim they are valid.
+func TestPreflightReportsRuntimeRejectedTemplates(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*cardmatch.File)
+		want   string
+	}{
+		{"wrong feature version", func(f *cardmatch.File) { f.FeatureVersion = "other" }, "template version mismatch"},
+		{"unknown template card", func(f *cardmatch.File) { f.Templates[0].CardID = 999999 }, "unknown template card 999999"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path, cfg, write := completeObservedFixture(t)
+			data, err := os.ReadFile(filepath.Join(filepath.Dir(path), cfg.Hand.Templates))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var templates cardmatch.File
+			if err := json.Unmarshal(data, &templates); err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(&templates)
+			// Re-pin the digest so only the loader-level rejection remains.
+			cfg.Hand.TemplatesSHA256 = write(cfg.Hand.Templates, templates)
+			write("match.json", cfg)
+
+			r := PreflightObservedMatch(path)
+			if r.LoadResult == "ok" || !strings.Contains(r.LoadResult, tc.want) {
+				t.Fatalf("load_result=%q want %q", r.LoadResult, tc.want)
+			}
+			if r.Hand.Valid == "ok" || !strings.Contains(r.Hand.Valid, tc.want) {
+				t.Fatalf("hand valid=%q want %q", r.Hand.Valid, tc.want)
+			}
+			if r.Hand.TmplValid == "ok" {
+				t.Fatalf("unverified templates reported ok: %+v", r.Hand)
+			}
+			if got := PreflightCheckResult(r); got == "ok" {
+				t.Fatal("expected blocking check result")
+			}
+		})
+	}
+}
+
+func TestPreflightRelativeConfigPath(t *testing.T) {
+	path, _, _ := completeObservedFixture(t)
+	dir := filepath.Dir(path)
+	t.Chdir(dir)
+
+	r := PreflightObservedMatch("match.json")
+	if r.LoadResult != "ok" {
+		t.Fatalf("load result: %s", r.LoadResult)
+	}
+	if !filepath.IsAbs(r.ConfigPath) {
+		t.Fatalf("config path was not resolved: %q", r.ConfigPath)
+	}
+	if got := PreflightCheckResult(r); got != "ok" {
+		t.Fatalf("check result: %s", got)
+	}
+	if r.Hand.Valid != "ok" {
+		t.Fatalf("hand: %+v", r.Hand)
+	}
+	// Asset paths must be resolved exactly once against the config directory.
+	for _, a := range r.AssetPaths {
+		if a.Error != "" {
+			t.Fatalf("asset %s path misresolved: %+v", a.Key, a)
+		}
+		if !strings.HasPrefix(a.Path, dir+string(os.PathSeparator)) {
+			t.Fatalf("asset %s path outside config directory: %+v", a.Key, a)
+		}
+		if n := strings.Count(a.Path, dir); n != 1 {
+			t.Fatalf("asset %s path resolved %d times: %s", a.Key, n, a.Path)
+		}
 	}
 }
 

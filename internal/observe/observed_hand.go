@@ -8,6 +8,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -73,23 +74,22 @@ func cardText(s string) string {
 // normalizeQuoted strips whitespace from s and returns the normalized text
 // together with a boolean slice where true means the character at that index
 // falls inside a quoted range. Word-internal apostrophes (e.g. "Renfri's") are
-// not treated as quote delimiters. All ASCII letters are lowercased so that
+// literal, while single quotes that delimit a reference (e.g. 'Wolf Pack') are
+// treated as quote delimiters. All ASCII letters are lowercased so that
 // quoted-range tracking and name matching are case-insensitive.
 func normalizeQuoted(s string) (string, []bool) {
 	var t strings.Builder
 	quoted := make([]bool, 0, len(s))
 
 	// Self-pairing quote characters: each occurrence toggles per-type depth.
-	// Apostrophe (') is excluded because it appears inside English names like
-	// "Renfri's Gang" and must not toggle a quoted range.
 	selfPairing := map[rune]struct{}{
 		'"': {},
 	}
 
-	// Paired quotes and brackets: opener -> closer
+	// Paired quotes and brackets: opener -> closer. Single quotes are handled
+	// separately because their word-internal use is not a delimiter.
 	pairs := map[rune]rune{
 		'“': '”', // “ ”
-		'‘': '’', // ‘ ’
 		'「': '」', // 「 」
 		'『': '』', // 『 」
 		'«': '»', // « »
@@ -101,9 +101,11 @@ func normalizeQuoted(s string) (string, []bool) {
 	}
 
 	depth := map[rune]int{}
+	singleDepth := 0
 	var bracketStack []rune
+	runes := []rune(s)
 
-	for _, r := range s {
+	for i, r := range runes {
 		if unicode.IsSpace(r) {
 			continue
 		}
@@ -114,19 +116,26 @@ func normalizeQuoted(s string) (string, []bool) {
 		}
 		t.WriteRune(norm)
 
-		if _, ok := selfPairing[r]; ok {
-			depth[r]++
-		}
-
-		if closer, ok := pairs[r]; ok {
-			bracketStack = append(bracketStack, closer)
-		} else if _, ok := openerOf[r]; ok {
-			if len(bracketStack) > 0 && bracketStack[len(bracketStack)-1] == r {
-				bracketStack = bracketStack[:len(bracketStack)-1]
+		switch {
+		case (r == '\'' || r == '’') && apostropheInsideWord(runes, i):
+			// Possessive/contraction apostrophe: literal, not a delimiter.
+		case r == '\'' || r == '’' || r == '‘':
+			// Straight or typographic single quotes delimit a reference.
+			singleDepth++
+		default:
+			if _, ok := selfPairing[r]; ok {
+				depth[r]++
+			}
+			if closer, ok := pairs[r]; ok {
+				bracketStack = append(bracketStack, closer)
+			} else if _, ok := openerOf[r]; ok {
+				if len(bracketStack) > 0 && bracketStack[len(bracketStack)-1] == r {
+					bracketStack = bracketStack[:len(bracketStack)-1]
+				}
 			}
 		}
 
-		inAny := false
+		inAny := singleDepth%2 == 1
 		for _, d := range depth {
 			if d%2 == 1 {
 				inAny = true
@@ -137,6 +146,17 @@ func normalizeQuoted(s string) (string, []bool) {
 	}
 
 	return t.String(), quoted
+}
+
+// apostropheInsideWord reports whether the quote at index i sits between two
+// letters or digits, as in "Renfri's". Such an apostrophe is part of the card
+// name and must not open or close a quoted reference.
+func apostropheInsideWord(runes []rune, i int) bool {
+	if i == 0 || i+1 >= len(runes) {
+		return false
+	}
+	word := func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+	return word(runes[i-1]) && word(runes[i+1])
 }
 
 // namedCard returns the configured card identified by the OCR text. Ability
@@ -204,19 +224,21 @@ func guardObservedCard(img image.Image, hand ObservedHandConfig, slot, cardID in
 	return nil
 }
 
-// hostAbsolutePath reports whether p is an absolute path on the host, either a
-// Unix absolute path (starts with '/'), a Windows drive-absolute (e.g.
-// "D:\..." where D is a letter followed by ':'), or a UNC path starting with
-// "\\". This lets a Mac-hosted config loader recognise a Windows target's
-// drive-letter paths and preserve them literally instead of trying to resolve
-// them relative to a Mac directory.
+// hostAbsolutePath reports whether p is an absolute path for the current
+// host. Native absolute paths always qualify. On non-Windows hosts a Windows
+// target's drive-absolute ("D:\...") or UNC ("\\server\share\...") path also
+// qualifies so a Mac-hosted preflight can inspect the config literally. On
+// Windows only native filepath.IsAbs semantics apply, so root-relative paths
+// such as "/tmp/STOP" or "\tmp\STOP" are not absolute.
 func hostAbsolutePath(p string) bool {
 	if p == "" {
 		return false
 	}
-	// Unix absolute.
-	if p[0] == '/' {
+	if filepath.IsAbs(p) {
 		return true
+	}
+	if runtime.GOOS == "windows" {
+		return false
 	}
 	// UNC \\server\share[\...]: both server and share must be present.
 	if len(p) >= 2 && p[0] == '\\' && p[1] == '\\' {

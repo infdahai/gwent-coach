@@ -1,16 +1,11 @@
 package observe
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"gwentcoachmvp/internal/cardindex"
-	"gwentcoachmvp/internal/cardmatch"
 )
 
 // PreflightReport summarises offline validation of an observed-match config.
@@ -55,9 +50,13 @@ type PreflightHand struct {
 	NamesMode bool     `json:"names_mode"`
 	Names     []string `json:"names,omitempty"`
 	DBPath    string   `json:"db_path,omitempty"`
-	DBValid   string   `json:"db_valid,omitempty"`
-	TmplPath  string   `json:"templates_path,omitempty"`
-	TmplValid string   `json:"templates_valid,omitempty"`
+	// Valid is the overall result of loadObservedHand: "ok" only when the
+	// complete hand module (geometry, database, and templates or names) is
+	// usable. Sub-fields are left empty when they were not fully verified.
+	Valid     string `json:"valid,omitempty"`
+	DBValid   string `json:"db_valid,omitempty"`
+	TmplPath  string `json:"templates_path,omitempty"`
+	TmplValid string `json:"templates_valid,omitempty"`
 }
 
 type PlayPreflight struct {
@@ -81,6 +80,12 @@ type AssetPathInfo struct {
 // returns a complete report; callers decide exit status with
 // PreflightCheckResult.
 func PreflightObservedMatch(path string) *PreflightReport {
+	// Resolve the config path once, before the loader rewrites asset paths
+	// relative to it. Otherwise a relative config path is joined a second time
+	// when asset paths are classified.
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
 	r := &PreflightReport{
 		ConfigPath:    path,
 		OfflineOnly:   true,
@@ -175,6 +180,7 @@ func preflightHand(r *PreflightReport, h ObservedHandConfig) {
 		r.Hand.Names = append(r.Hand.Names, n.Name)
 	}
 	r.Hand.DBPath = h.Database
+	r.Hand.Valid = "ok"
 	r.Hand.DBValid = "ok"
 	if !r.Hand.NamesMode {
 		r.Hand.TmplPath = h.Templates
@@ -228,27 +234,28 @@ func diagnosePreflight(r *PreflightReport, path string) {
 		}
 	}
 
-	// Hand diagnostics.
+	// Hand diagnostics. Reuse the runtime loader so templates or names it would
+	// reject (version mismatch, unknown card IDs, bad geometry) are never
+	// reported as usable. It is read-only. Paths that target another host
+	// cannot be verified here and are not claimed valid.
 	r.Hand.NamesMode = len(cfg.Hand.Names) > 0
 	for _, n := range cfg.Hand.Names {
 		r.Hand.Names = append(r.Hand.Names, n.Name)
 	}
 	r.Hand.DBPath = cfg.Hand.Database
-	if isForeign(cfg.Hand.Database) {
-		r.Hand.DBValid = "not verified on this host"
-	} else if _, err := openHandDatabase(resolve(cfg.Hand.Database)); err != nil {
-		r.Hand.DBValid = err.Error()
-	} else {
-		r.Hand.DBValid = "ok"
-	}
 	if !r.Hand.NamesMode {
 		r.Hand.TmplPath = cfg.Hand.Templates
-		if isForeign(cfg.Hand.Templates) {
-			r.Hand.TmplValid = "not verified on this host"
-		} else if err := checkHandTemplates(resolve(cfg.Hand.Templates), cfg.Hand.TemplatesSHA256); err != nil {
-			r.Hand.TmplValid = err.Error()
+	}
+	switch {
+	case isForeign(cfg.Hand.Database):
+		r.Hand.Valid = "not verified on this host"
+	case !r.Hand.NamesMode && isForeign(cfg.Hand.Templates):
+		r.Hand.Valid = "not verified on this host"
+	default:
+		if _, err := loadObservedHand(path, &cfg.Hand); err != nil {
+			r.Hand.Valid = err.Error()
 		} else {
-			r.Hand.TmplValid = "ok"
+			r.Hand.Valid = "ok"
 		}
 	}
 
@@ -327,29 +334,6 @@ func classifyAssetPaths(r *PreflightReport, cfg ObservedMatchConfig) {
 
 func isForeign(p string) bool {
 	return hostAbsolutePath(p) && !filepath.IsAbs(p)
-}
-
-func openHandDatabase(path string) (*cardindex.Index, error) {
-	return cardindex.Open(path, cardindex.Version{Data: cardindex.DataVersion, Rules: cardindex.RulesVersion})
-}
-
-func checkHandTemplates(path, wantSHA256 string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	sum := sha256.Sum256(data)
-	if hex.EncodeToString(sum[:]) != wantSHA256 {
-		return fmt.Errorf("hand template digest mismatch")
-	}
-	var templates cardmatch.File
-	if err := json.Unmarshal(data, &templates); err != nil {
-		return err
-	}
-	if len(templates.Templates) < 2 {
-		return fmt.Errorf("hand identity requires competing card templates")
-	}
-	return nil
 }
 
 func pathExists(p string) bool {

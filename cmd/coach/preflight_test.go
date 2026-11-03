@@ -198,32 +198,39 @@ func TestPreflightCLIValidConfig(t *testing.T) {
 func TestPreflightCLIBlocking(t *testing.T) {
 	bin := buildCoachBinary(t)
 	cases := []struct {
-		name   string
-		mutate func(dir string, cfg *cliConfig, write func(string, any) string)
+		name     string
+		mutate   func(dir string, cfg *cliConfig, write func(string, any) string)
+		wantHand string
 	}{
 		{"missing victory", func(dir string, cfg *cliConfig, write func(string, any) string) {
 			dropPhase(t, dir, cfg, write, "victory")
-		}},
+		}, ""},
 		{"missing draw", func(dir string, cfg *cliConfig, write func(string, any) string) {
 			dropPhase(t, dir, cfg, write, "draw")
-		}},
+		}, ""},
 		{"bad database", func(dir string, cfg *cliConfig, write func(string, any) string) {
 			cfg.Hand.Database = "missing.db"
-		}},
+		}, ""},
 		{"bad template hash", func(dir string, cfg *cliConfig, write func(string, any) string) {
 			cfg.Hand.TemplatesSHA256 = strings.Repeat("0", 64)
-		}},
+		}, ""},
+		{"template version mismatch", func(dir string, cfg *cliConfig, write func(string, any) string) {
+			mutateCLITemplates(t, dir, cfg, write, func(f *cardmatch.File) { f.FeatureVersion = "other" })
+		}, "template version mismatch"},
+		{"unknown template card", func(dir string, cfg *cliConfig, write func(string, any) string) {
+			mutateCLITemplates(t, dir, cfg, write, func(f *cardmatch.File) { f.Templates[0].CardID = 999999 })
+		}, "unknown template card 999999"},
 		{"unknown schema", func(dir string, cfg *cliConfig, write func(string, any) string) {
 			cfg.Kind = "unknown-v1"
-		}},
+		}, ""},
 		{"bad board roi", func(dir string, cfg *cliConfig, write func(string, any) string) {
 			cfg.Plays[0].BoardROI = cliRect{Min: cliPoint{0, 0}, Max: cliPoint{10, 10}}
-		}},
+		}, ""},
 		{"invalid names", func(dir string, cfg *cliConfig, write func(string, any) string) {
 			cfg.Hand.Names = []cliName{{Name: "Wrong Name", CardID: 142306}, {Name: "Also Wrong", CardID: 142315}}
 			cfg.Hand.Templates, cfg.Hand.TemplatesSHA256 = "", ""
 			cfg.Hand.GuardSlots = nil
-		}},
+		}, "does not match"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -242,8 +249,33 @@ func TestPreflightCLIBlocking(t *testing.T) {
 			if report["resources_ready"] == true {
 				t.Fatalf("resources_ready must be false: %v", report)
 			}
+			hand, ok := report["hand"].(map[string]any)
+			if !ok {
+				t.Fatalf("missing hand report: %v", report)
+			}
+			if tc.wantHand != "" {
+				valid, _ := hand["valid"].(string)
+				if valid == "ok" || !strings.Contains(valid, tc.wantHand) {
+					t.Fatalf("hand valid=%q want %q", valid, tc.wantHand)
+				}
+			}
 		})
 	}
+}
+
+func mutateCLITemplates(t *testing.T, dir string, cfg *cliConfig, write func(string, any) string, mutate func(*cardmatch.File)) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, cfg.Hand.Templates))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var templates cardmatch.File
+	if err := json.Unmarshal(data, &templates); err != nil {
+		t.Fatal(err)
+	}
+	mutate(&templates)
+	// Re-pin the digest so only runtime loader validation rejects the file.
+	cfg.Hand.TemplatesSHA256 = write(cfg.Hand.Templates, templates)
 }
 
 func TestPreflightCLIDoesNotCreateFiles(t *testing.T) {
