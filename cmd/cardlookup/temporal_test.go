@@ -30,7 +30,7 @@ func TestTemporalEvaluation(t *testing.T) {
 		t.Fatal(e)
 	}
 	f.Close()
-	regions := []temporalAnnotation{{ROI: cardmatch.ROI{0, 0, 10, 10}, Visible: true, Instance: "a"}, {ROI: cardmatch.ROI{10, 0, 10, 10}, Visible: true, Instance: "b"}, {ROI: cardmatch.ROI{20, 0, 10, 10}, Visible: false, Instance: "c"}}
+	regions := []temporalAnnotation{{ROI: cardmatch.ROI{X: 0, Y: 0, Width: 10, Height: 10}, Visible: true, Instance: "a"}, {ROI: cardmatch.ROI{X: 10, Y: 0, Width: 10, Height: 10}, Visible: true, Instance: "b"}, {ROI: cardmatch.ROI{X: 20, Y: 0, Width: 10, Height: 10}, Visible: false, Instance: "c"}}
 	now := time.Now().UTC()
 	m := temporalManifest{MaxGapMS: 2000, MaxDistance: 2, MinGap: 10, Frames: []temporalFrame{{Image: "frame.png", Batch: "one", CapturedAt: now, Regions: regions}, {Image: "frame.png", Batch: "one", CapturedAt: now.Add(time.Second), Regions: regions}, {Image: "frame.png", Batch: "two", CapturedAt: now.Add(2 * time.Second), Regions: regions}}}
 	write := func() {

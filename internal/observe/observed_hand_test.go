@@ -239,6 +239,8 @@ func TestHostAbsolutePath(t *testing.T) {
 		// absolute and must not be accepted as STOP/StateDir locations.
 		cases["/tmp/STOP"] = false
 		cases[`\tmp\STOP`] = false
+		// Native Go reports bare UNC roots as absolute too; follow it.
+		cases[`\\server`] = filepath.IsAbs(`\\server`)
 		cases[`\\server\share`] = filepath.IsAbs(`\\server\share`)
 	} else {
 		cases["/tmp/STOP"] = true
