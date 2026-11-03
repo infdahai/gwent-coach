@@ -34,11 +34,21 @@ type Command struct {
 	Y         int    `json:"y,omitempty"`
 }
 
+// InputIntent records the submitted click/hold reference and client
+// coordinates. Coordinates are explicit so zeros survive serialization. This
+// is evidence of requested input, not proof that delivery had any effect.
+type InputIntent struct {
+	Reference string `json:"reference"`
+	X         int    `json:"x"`
+	Y         int    `json:"y"`
+}
+
 type Receipt struct {
 	ID        string           `json:"id"`
 	Command   string           `json:"command"`
 	State     string           `json:"state"` // accepted, completed, failed, rejected
 	Reference string           `json:"reference,omitempty"`
+	Intent    *InputIntent     `json:"intent,omitempty"`
 	Input     *desktop.Receipt `json:"input,omitempty"`
 	Error     string           `json:"error,omitempty"`
 	At        time.Time        `json:"at"`

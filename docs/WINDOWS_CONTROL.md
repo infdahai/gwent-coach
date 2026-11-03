@@ -148,6 +148,13 @@ You can also supply `-id` with a new 32-character lowercase hex value. The host
 persists that ID before execution. A duplicate returns HTTP 409 with the original
 receipt and never executes, even with a different payload or after restart.
 
+An accepted `click` or `hold` claim also persists an optional `intent` object
+containing the submitted capture `reference` and client `x`/`y`; zero coordinates
+are retained. It is written before backend execution and is preserved in
+completed, failed, rejected, duplicate and post-restart receipts. This records
+requested input only, not proof that Windows delivered it or the application
+acted on it. Receipts written by older hosts omit the field.
+
 An HTTP response confirms transport, not application behavior. A receipt's
 `accepted` state means pending; `completed` means the backend returned without
 error; `failed` preserves its error and any input delivery detail. Click/hold input
@@ -155,6 +162,12 @@ error; `failed` preserves its error and any input delivery detail. Click/hold in
 what you intended. `partial_or_unknown`, cursor motion, and failed receipts must
 be reconciled using the screen and logs. The CLI exits nonzero for failed/rejected
 capture or click. Session semantic results remain in the native session journals.
+
+Persisted input `intent` and `delivered_unconfirmed` receipts are not semantic
+postcondition confirmation. Pre-input captures or phase histograms are
+pre-action observations; they do not establish reconciliation or authorize
+releasing a game interlock. Historical evidence of an unresolved action remains
+unresolved until separately reconciled.
 
 **On timeout, disconnect, or unreadable response, do not submit another click or
 session.** Query the original ID with `receipt`, then `status` and `logs`. The

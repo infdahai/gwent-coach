@@ -34,9 +34,12 @@ func TestHoldReceiptsAndSingleUse(t *testing.T) {
 			if r.Command != "hold" || r.State != state || r.Input == nil || r.Input.Outcome != outcome || r.Input.EventsSent != count {
 				t.Fatalf("receipt %+v", r)
 			}
-			cmd.Kind = "click"
+			assertIntent(t, r, ref.Reference, 5, 6)
+			cmd.Kind, cmd.X, cmd.Y = "click", 9, 10
 			if prior, err := c.Submit(context.Background(), cmd); err == nil || prior.Command != "hold" {
 				t.Fatalf("duplicate %+v %v", prior, err)
+			} else {
+				assertIntent(t, prior, ref.Reference, 5, 6)
 			}
 			cmd.ID = NewID()
 			if _, err := c.Submit(context.Background(), cmd); err == nil {

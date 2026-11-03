@@ -256,6 +256,9 @@ func (h *Host) command(w http.ResponseWriter, cmd Command) {
 		return
 	}
 	r := Receipt{ID: cmd.ID, Command: cmd.Kind, State: "accepted", At: time.Now().UTC()}
+	if cmd.Kind == "click" || cmd.Kind == "hold" {
+		r.Intent = &InputIntent{Reference: cmd.Reference, X: cmd.X, Y: cmd.Y}
+	}
 	data, _ := json.Marshal(r)
 	if err := writeExclusive(h.requestPath(cmd.ID, ".claim.json"), data); err != nil {
 		respond(w, 500, map[string]string{"error": "cannot durably claim request"})
