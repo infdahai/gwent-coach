@@ -140,12 +140,17 @@ func RunObservedMatch(ctx context.Context, out string, logger *log.Logger, cfg O
 				found = true
 				a.PhaseModel, a.phaseModel, a.ExpectedPhase = p.ModelPath, p.model, frame.Plays[p.ID]
 				if input.Name == "select_card" {
+					a.extraPhaseModel, a.extraExpectedPhase = cfg.model, "turn"
+					cardID := p.CardID
 					if !input.Identified {
-						a.extraPhaseModel, a.extraExpectedPhase = cfg.model, "turn"
-						cardID := p.CardID
 						a.imageGuard = func(img image.Image) error { return guardObservedCard(img, cfg.Hand, input.Slot, cardID) }
 					} else {
-						a.extraPhaseModel, a.extraExpectedPhase = cfg.model, "turn"
+						names := cfg.Hand.Names
+						a.imageGuard = func(img image.Image) error {
+							return guardNamedCardFrame(img, out, func(path string) (string, error) {
+								return RecognizeText(path, io.Discard)
+							}, names, cardID)
+						}
 					}
 				}
 			}
