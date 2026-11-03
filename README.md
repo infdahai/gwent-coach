@@ -19,6 +19,19 @@ go run ./cmd/rules -mode demo > /tmp/gwent-demo.json
 go run ./cmd/rules -mode replay -input /tmp/gwent-demo.json
 ```
 
+## Testing and CI
+
+GitHub Actions runs four layers on every push and pull request:
+
+| Layer | Scope | Runs when |
+|-------|-------|-----------|
+| L1 Static | `gofmt`, `go vet ./...`, `go build ./...` | always |
+| L2 Unit | Tests that do not read `data/cards/` (Linux and macOS) | always |
+| L3 Integration | Full `go test ./...`, requiring the card snapshots | only when snapshots are configured |
+| L4 Cross-platform | `go build`/`go vet` for windows/amd64, linux/amd64+arm64, darwin/amd64+arm64 | always |
+
+L3 is skipped on the public repository because the snapshots are not distributed. To enable it, store base64-encoded snapshots as the repository secrets `GWENT_CARDS_EN_B64` and `GWENT_CARDS_CN_B64`; the workflow writes them to `data/cards/14.10.0/{en,cn}/cards.json` before testing. Pushing a `v*` tag cross-compiles every `cmd/*` binary and publishes a GitHub Release.
+
 The pure Go `native-v1` offline engine implements six pinned card abilities, armor/damage/boost/death, atomic actions, Pass, resource retention, match settlement, deterministic JSON replay and a prediction/confirmation adapter. All 1,381 local catalog entries appear in the coverage report; 1,375 are explicitly unsupported and rejected by the simulator.
 
 See [architecture, evidence and next coverage steps](docs/NATIVE_RULES.md). Round ties and transition constraints are explicit experimental profile choices, not verified seasonal rules. The simulator holds full information, while policy views hide opponent hands and deck order. Live partial-state tracking, OCR, full-card effects, search, self-play tuning and reinforcement learning are not implemented. Tests intentionally fail with a missing-file error until snapshots are imported; no network access occurs during tests.
