@@ -64,10 +64,10 @@ jobs:
           grep -rl --include='*_test.go' 'data/cards/' . \
             | sed -e 's#/[^/]*$##' -e 's#^\./##' -e 's#^#./#' \
             | sort -u | xargs -n1 go list > "$data_packages"
-          echo "Data-dependent packages (excluded):"
+          echo "Data-dependent packages (excluded from L2):"
           cat "$data_packages"
           go list ./... | grep -vxF -f "$data_packages" > "$RUNNER_TEMP/packages.txt"
-          echo "Selected $(wc -l < "$RUNNER_TEMP/packages.txt") packages."
+          echo "L2 selected $(wc -l < "$RUNNER_TEMP/packages.txt") packages."
 
       - name: go test
         shell: bash
@@ -90,13 +90,19 @@ jobs:
 
       - name: Materialize card snapshots
         env:
-          CARDS_EN_B64: ${{ secrets.GWENT_CARDS_EN_B64 }}
-          CARDS_CN_B64: ${{ secrets.GWENT_CARDS_CN_B64 }}
+          CARDS_EN_URL: ${{ secrets.GWENT_CARDS_EN_URL }}
+          CARDS_CN_URL: ${{ secrets.GWENT_CARDS_CN_URL }}
+          CARDS_AUTH: ${{ secrets.GWENT_CARDS_AUTH }}
         run: |
           set -euo pipefail
           mkdir -p data/cards/14.10.0/en data/cards/14.10.0/cn
-          printf '%s' "$CARDS_EN_B64" | base64 -d > data/cards/14.10.0/en/cards.json
-          printf '%s' "$CARDS_CN_B64" | base64 -d > data/cards/14.10.0/cn/cards.json
+          auth=()
+          if [ -n "${CARDS_AUTH:-}" ]; then
+            auth=(-H "Authorization: $CARDS_AUTH")
+          fi
+          curl -fsSL --retry 3 "${auth[@]}" "$CARDS_EN_URL" -o data/cards/14.10.0/en/cards.json
+          curl -fsSL --retry 3 "${auth[@]}" "$CARDS_CN_URL" -o data/cards/14.10.0/cn/cards.json
+          go run ./cmd/carddb -db data/cards/14.10.0/en/cards.json -query 152405 > /dev/null
 
       - name: go test
         run: go test -shuffle=on -count=1 -timeout=600s ./...
@@ -109,14 +115,14 @@ jobs:
     steps:
       - id: check
         env:
-          CARDS_EN_B64: ${{ secrets.GWENT_CARDS_EN_B64 }}
-          CARDS_CN_B64: ${{ secrets.GWENT_CARDS_CN_B64 }}
+          CARDS_EN_URL: ${{ secrets.GWENT_CARDS_EN_URL }}
+          CARDS_CN_URL: ${{ secrets.GWENT_CARDS_CN_URL }}
         run: |
-          if [ -n "$CARDS_EN_B64" ] && [ -n "$CARDS_CN_B64" ]; then
+          if [ -n "$CARDS_EN_URL" ] && [ -n "$CARDS_CN_URL" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=L3 skipped::Card snapshots unavailable. Add GWENT_CARDS_EN_B64 and GWENT_CARDS_CN_B64 repository secrets to enable integration tests."
+            echo "::notice title=L3 skipped::Card snapshots unavailable. Add GWENT_CARDS_EN_URL and GWENT_CARDS_CN_URL repository secrets to enable integration tests."
           fi
 
   # L4 — cross-platform compilation and vet. Windows is the runtime target,
