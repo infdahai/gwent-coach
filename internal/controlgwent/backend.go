@@ -26,44 +26,72 @@ func (b Backend) Click(ctx context.Context, ref desktop.Capture, x, y int, stop 
 	return desktop.Click(ctx, ref, x, y, stop)
 }
 
+func (b Backend) Hold(ctx context.Context, ref desktop.Capture, x, y int, stop string) (desktop.Receipt, error) {
+	return desktop.Hold(ctx, ref, x, y, stop)
+}
+
 func (b Backend) Validate() error {
+	_, err := b.observedConfig()
+	return err
+}
+
+// Load the observed profile and model bytes together. RunSession uses this same
+// validated in-memory snapshot, including the stop latch, throughout the run.
+func (b Backend) observedConfig() (*observe.ObservedMatchConfig, error) {
 	if b.SessionConfig == "" {
-		return nil
+		return nil, nil
 	}
 	data, err := os.ReadFile(b.SessionConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	var cfg observe.NativeSessionConfig
-	if err = json.Unmarshal(data, &cfg); err != nil {
-		return err
+	var header struct{ Kind, LoopConfig string }
+	if err = json.Unmarshal(data, &header); err != nil {
+		return nil, err
 	}
-	path := cfg.LoopConfig
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(filepath.Dir(b.SessionConfig), path)
+	var observed *observe.ObservedMatchConfig
+	var stop string
+	if header.Kind == observe.ObservedMatchKind {
+		cfg, err := observe.LoadObservedMatchConfig(b.SessionConfig)
+		if err != nil {
+			return nil, err
+		}
+		observed, stop = &cfg, cfg.StopFile
+	} else {
+		if header.Kind != "" {
+			return nil, fmt.Errorf("unknown session kind %q", header.Kind)
+		}
+		path := header.LoopConfig
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(b.SessionConfig), path)
+		}
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		var loop observe.NativeLoopConfig
+		if err = json.Unmarshal(data, &loop); err != nil {
+			return nil, err
+		}
+		stop = loop.StopFile
 	}
-	data, err = os.ReadFile(path)
-	if err != nil {
-		return err
+	if !filepath.IsAbs(stop) || !strings.EqualFold(filepath.Clean(stop), filepath.Clean(b.StopFile)) {
+		return nil, fmt.Errorf("host stop file must match configured session's absolute StopFile")
 	}
-	var loop observe.NativeLoopConfig
-	if err = json.Unmarshal(data, &loop); err != nil {
-		return err
-	}
-	// Existing native input interprets StopFile as an absolute path. Refuse a
-	// mismatch instead of running with a second, ineffective stop latch.
-	if !filepath.IsAbs(loop.StopFile) || !strings.EqualFold(filepath.Clean(loop.StopFile), filepath.Clean(b.StopFile)) {
-		return fmt.Errorf("host stop file must match configured native loop's absolute StopFile")
-	}
-	return nil
+	return observed, nil
 }
 
 func (b Backend) RunSession(ctx context.Context, out string, output io.Writer) error {
 	if b.SessionConfig == "" {
 		return fmt.Errorf("host has no configured session")
 	}
-	if err := b.Validate(); err != nil {
+	cfg, err := b.observedConfig()
+	if err != nil {
 		return err
 	}
-	return observe.RunNativeSessionContext(ctx, out, log.New(output, "", log.LstdFlags|log.LUTC), b.SessionConfig, output)
+	logger := log.New(output, "", log.LstdFlags|log.LUTC)
+	if cfg != nil {
+		return observe.RunObservedMatch(ctx, out, logger, *cfg, output)
+	}
+	return observe.RunNativeSessionContext(ctx, out, logger, b.SessionConfig, output)
 }

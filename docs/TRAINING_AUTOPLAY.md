@@ -2,6 +2,114 @@
 
 Status: **experimental; not qualified**. Windows training input, a partial rules-backed decision loop, phase navigation and mulligan transitions have been exercised on the target desktop. No uninterrupted complete match has been qualified. The older prototype and measurements below describe their state at the time and are retained as historical evidence.
 
+## Module boundaries (2026-11-03)
+
+Implementation is split across the following files under `internal/observe/`:
+
+| File | Responsibility |
+|------|---------------|
+| `observed_match.go` | Platform-independent runner logic: `runObservedMatch`, frame pair await, turn loop, identity/play selection, result qualification |
+| `observed_match_config.go` | `ObservedMatchConfig`, `LoadObservedMatchConfig`, config validation; `ObservedHandConfig` and `ObservedCardName` are defined in `observed_hand.go` |
+| `observed_match_windows.go` | Windows adapter: `RunObservedMatch`, capture, send, identify (OCR hover), progress, `ExecuteContext` bridge |
+| `observed_identity_guard*.go` | Click-time OCR identity guard for named selects (run-time fresh-frame re-verification); injectable OCR so Mac tests cover the logic |
+| `observed_match_test.go` | Platform-independent runner tests (including OCR identity tests via `matchTestHost`) |
+| `observed_hand*.go` | `ObservedHandConfig`, `ObservedCardName`, `loadObservedHand` (hand-identity loader for art templates and tooltip name modes), geometry validation, DB-backed name resolution, `namedCard`, `safeObservedUnit` |
+| `observed_play_txn*.go` | Card-play transaction (`playSelectedCard` / `observedPlayChannel`): single play selection extracted from lifecycle, preserving the two-frame evidence check and result qualification; pass/mulligan qualification is not owned here |
+| `observed_preflight*.go` | `PreflightObservedMatch`: read-only offline preflight validation, resource connectivity check, result coverage report |
+| `cmd/` | CLI entry points: `-observed-match`, `preflight-observed`, control session |
+
+`ObservedMatchConfig` and `ObservedPlay` remain in `observed_match_config.go`; `ObservedHandConfig`, `ObservedCardName`, `namedCard`, `safeObservedUnit`, and the hand loader (`loadObservedHand`) live in `observed_hand.go`, which resolves the database and template assets. No code is duplicated. Independent verification entry: `go test -count=1 ./internal/observe` runs the platform-independent suite; `GOOS=windows GOARCH=amd64 go build ./internal/... ./cmd/...` cross-compiles. Live Windows qualification requires the actual target desktop and uninterrupted full matches.
+
+## Offline preflight-observed
+
+`coach preflight-observed <match.json>` validates an observed-match configuration against real local assets without starting Windows or sending any input. It always produces a complete JSON report:
+
+- **LoadResult**: `"ok"` when every required asset resolves and validates on this host; otherwise the loader's exact error.
+- **ResourcesReady**: true only when `LoadResult == "ok"` **and** the lifecycle model covers all three result phases (victory, defeat, draw).
+- **Result coverage**: individually reports victory/defeat/draw presence in the lifecycle model.
+- **Asset classification**: each referenced path is reported with its class (`host-absolute`, `relative`, `foreign-absolute`, `runtime-path`). STOP and StateDir are runtime paths that normally do not exist before a run, classified as `runtime-path` with no existence error.
+- **Hand validation**: the preflight runs the same `loadObservedHand` loader as the runner, so art templates, databases, and name sets are accepted only when the runner would accept them; the report carries the loader's exact error and never marks unverified foreign-host assets as valid.
+- **Play validation**: each play model must bind its BoardROI across all phase variants.
+
+Nonzero exit means blocking deficiencies. The config must still be validated independently for actual deployment; the preflight does not exercise Windows capture, input, or OCR latency.
+
+To run against real assets on Mac:
+
+```sh
+coach preflight-observed match.json > report.json
+```
+
+## Constrained observed match runner
+
+`coach.exe -observed-match match.json -out <new-output-directory>` runs one ordinary versus-computer match entirely in the Windows interactive process. The resident host also accepts this file through its existing `-session-config` option; start it once with `coach control run-session` and inspect `control status`, `control receipt`, and `control logs`. The Mac client may inspect logs; all recognition, decisions and inputs run locally on Windows. The existing native rules/session mode remains available separately.
+
+This path uses calibrated UI evidence without constructing a full rules-engine state. Card identity follows one of two independent paths:
+- **Art match (standard):** The first unused safe play profile whose `ready` label agrees in two fresh frames and whose card art agrees at the same calibrated hand slot in both frames. Slot identity uses the existing card-art scanner (`internal/observe/hand_scan.go`); other hand slots may remain unknown.
+- **OCR name (Names mode):** Configured tooltip card names (`ObservedCardName`) are matched against Windows OCR output after hovering each slot. This path skips the art scanner and requires `cfg.Hand.Names` to be non-empty with at least two competing names. The hover capture and OCR run in the `identify` callback (`observed_match_windows.go`). Identity is established on the hovered frame, and immediately before the select click the adapter captures the fresh guard frame (the cursor remains on the card at its click point), writes it to one transient PNG under the private run directory, re-runs OCR, and requires `namedCard` to resolve to the play profile's `CardID` (`guardNamedCardFrame` in `observed_identity_guard.go`). A different name, OCR failure, write/cleanup failure, lifecycle `turn` change or play-model `ready` change refuses the click; the original two-second input deadline is not extended, so slow OCR rejects rather than skips identity. This click-time OCR guard has not been measured live on Windows.
+The click follows the recognized slot, so a shuffled order does not require an exact whole-hand template. Each profile is consumed once per match. If none is verified, it passes. This is a conservative execution policy, not a competitive strategy or general hand recognizer. A pass-only match is explicitly unqualified. Completion requires a confirmed placement, at least two observed round starts, and two matching result frames; starting on a result screen never qualifies. An optional direct result-to-training exit is separately confirmed.
+
+The fixed allowlist (`safeObservedUnit` in `observed_hand.go`) contains units with no deploy target or choice: Pavko Gale (201676), Hawker Smuggler (142315), Antherion (203073), Dol Blathanna Sentry (200039), Naiad Fledgling (203152), Mahakam Defender (142306); deploy-effects-resolve-without-choice cards: Trapmaker (203256), Wolf Pack (132403), Mahakam Marauder (200042); and summon/passive-deploy cards: Eskel (112202), Vesemir (112203), Mahakam Volunteers (201559), Renfri's Gang (203089). This list is owned by the hand module in `observed_hand.go`; re-audit if the game's card definitions change.
+
+Pass uses a fixed 1.5-second left-button hold; EndTurn is a plain click. The
+observed-match runner already uses `Action.Kind: "hold"` for pass and `Action.Kind:
+"click"` for end-turn, matching the control CLIs `coach control hold` and
+`coach control click` respectively. Passive effects and orders remain game-owned; the policy does not predict, disable, or activate them. Re-audit this list if the game's card definitions change. Other units, leader actions, targets, tutors and menus stop outside the calibrated path. No LLM service or credentials are needed.
+
+Configuration below illustrates the schema. All points and regions must be measured for the actual 1920×1080 client; the example play coordinates are **not calibration**. Replace both digests with SHA-256 hashes of the actual model bytes, and use the resident host's absolute stop-file path. Model paths and `StateDir` resolve relative to the configuration file. `StateDir` must be new, with its parent already present. `DeckID` records the audited selected deck; the `training` image anchors must independently establish that deck and versus-computer mode.
+
+```json
+{
+  "Kind": "observed-match-v1",
+  "ID": "ordinary-match-001",
+  "DeckID": "audited-selected-deck",
+  "ModelPath": "lifecycle.json",
+  "ModelSHA256": "<sha256-of-lifecycle-model>",
+  "StopFile": "<absolute-host-stop-file>",
+  "StateDir": "attempt-001",
+  "TimeoutMS": 900000,
+  "TransitionTimeoutMS": 90000,
+  "UnknownTimeoutMS": 5000,
+  "Start": {"X": 790, "Y": 555},
+  "FinishMulligan": {"X": 870, "Y": 1020},
+  "ConfirmMulligan": {"X": 892, "Y": 635},
+  "Pass": {"X": 1845, "Y": 540},
+  "EndTurn": {"X": 1845, "Y": 540},
+  "Hand": {
+    "Database": "cards.db",
+    "Templates": "hand-templates.json",
+    "TemplatesSHA256": "<sha256-of-hand-template-file>",
+    "Slots": [{"x":450,"y":900,"width":100,"height":100}],
+    "GuardSlots": [{"x":450,"y":850,"width":100,"height":100}],
+    "Clicks": [{"X":500,"Y":980}],
+    "MaxDistance": 4,
+    "MinGap": 3
+  },
+  "Plays": [{
+    "ID": "defender-empty-row",
+    "CardID": 142306,
+    "ModelPath": "defender-play.json",
+    "ModelSHA256": "<sha256-of-play-model>",
+    "Row": {"X": 900, "Y": 700},
+    "BoardROI": {"Min": {"X": 850, "Y": 650}, "Max": {"X": 950, "Y": 750}}
+  }]
+}
+```
+
+Omit `Exit` to finish at the observed result. Supply `"Exit":{"X":...,"Y":...}` only for an independently verified direct return to `training`; rewards or other intervening menus are unsupported. This runner does not claim GG, score recognition, or strategic effectiveness.
+
+Required local assets:
+
+- **Lifecycle model:** `training`, `mulligan`, `mulligan-confirm`, `turn`, `passed`, and at least one of `victory`, `defeat`, `draw`. Add all result labels actually expected. Calibrate `opponent` for opponent turns and `transition` for non-actionable loading/round animations. Unknown frames wait at most `UnknownTimeoutMS`; known wait phases use `TransitionTimeoutMS`. `turn` must mean an eligible card-play/pass state, not merely a green UI region or an end-turn-only state.
+- **Hand identity assets:** versioned `cards.db` and a SHA-256-pinned `cardmatch.File` template index, created using `docs/CARD_LOOKUP.md`. Include safe-card images plus competing other card IDs and independently validated pose variants. `Slots`, `GuardSlots` and `Clicks` are equal-length, same-index lists of 1–10 native art regions and input points. Provide all ten calibrated opening slots for shuffled opening coverage; the one-slot JSON above only illustrates the schema. `Slots` describe unhovered art, while `GuardSlots` describe that card's art after hovering its click point. A click must lie inside its original art region. The post-hover guard rejects an unknown or changed identity. Templates and distance/gap thresholds must be validated against nonmatching cards, not just positive crops. No complete known hand or card count is inferred. Different hand sizes or poses require measured slot coverage; the scanner does not discover card rectangles.
+- **One or more play models:** required `ready`, `selected`, `ended`; optional `placed`. Every phase and variant must contain an exact RGB anchor for `BoardROI`, plus independent interaction/turn anchors. The row click must fall within that region. `ready` proves an empty, legal destination. `selected` proves the card-selection/placement interaction, with that destination still empty. `placed` proves the expected known card newly occupies that board region, with an active end-turn control. `ended` proves that same new board card and that the turn has already ended. The latter permits automatic turn handoff without another click. A turn-button change alone cannot confirm placement. Do not bind these models to the identities or exact arrangement of the remaining hand: hand identity comes from the independent slot scanner before selection, and placement comes from the empty-to-known-card board change afterward.
+- **Independent calibration evidence:** use native-size PNG frames and the existing `-build-phases`, `-recognize`, `-diagnose-phase`, and `-replay-phases` tools. Test held-out positive frames and negative frames including different cards, hand layouts, an already occupied destination, hover/selection animations and target overlays. Do not relabel old scenario states or use the same crop for both precondition and placement. Card/layout variants need their own independently verified evidence; a hash pins bytes but does not validate their meaning. Images, models and run archives stay private and uncommitted.
+
+Before observed card selection, the Windows input adapter waits 900 ms for hovered art to settle, checking cancellation, STOP and window/deadline guards between waits of at most 50 ms. This stays within the original two-second input deadline; a late guard refuses the click rather than extending that deadline. The adapter then checks the hovered card identity, the play model and the lifecycle `turn` label again immediately before card selection. Other actions use their observed phase's fresh model guard. Foreground, desktop, session, geometry, cursor, Ctrl/F8, STOP and context cancellation protections remain active. Two distinct increasing capture identities/timestamps are required at each confirmation; both must be fresh and captured after delivery. No uncertain input is replayed. The existing shared training interlock remains held after completion or failure, and starting another directory cannot bypass it. Old pending inputs must be reconciled before launching; this runner does not clear old claims or offer a resume shortcut.
+
+The private `StateDir/events.jsonl` records executable/config/model identities, observed frames, synced intent, API delivery receipt, confirmation, round number, confirmed play count, result and failure reason. `result_confirmed` records actual observed result evidence; `match_completed` appears only after the qualification gates and any requested exit. A stopped process with a pending intent is unresolved even if a transport receipt exists. The resident command log shows compact action/confirmation events and an observation heartbeat at most every five seconds, keeping the bounded host log readable through the result. Full capture/input diagnostics remain in private `StateDir/native.log`, and every observed frame remains in the canonical JSONL ledger.
+
+Offline verification covers a two-round match with actual selection/placement steps, manual and automatic turn endings, optional exit, cancellation, missing/uncertain receipts, repeated evidence, incomplete placement and result-only/pass-only rejection. Windows GUI and Mac builds are available from the task build output. **Live autonomous completion remains pending calibrated assets and an uninterrupted Windows run.** These synthetic tests do not qualify a real match or replace the broader repeated-trial acceptance baseline below.
+
 ## Live integration, 2026-11-01
 
 The Windows resident process can navigate calibrated training phases, finish a mulligan, verify visible hand slots in two frames, select supported legal actions through the decision service, deliver guarded inputs and check action-specific postconditions. Unknown slots remain unknown. The phase and card templates are local to the observed client and are not a general recognizer.

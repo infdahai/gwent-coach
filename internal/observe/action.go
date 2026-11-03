@@ -3,6 +3,7 @@ package observe
 import (
 	"context"
 	"fmt"
+	"image"
 	"time"
 )
 
@@ -16,19 +17,22 @@ type InputReceipt struct {
 
 // Action is a single operator-reviewed input tied to a recent observation.
 type Action struct {
-	Kind          string `json:"kind"`
-	X             int    `json:"x"`
-	Y             int    `json:"y"`
-	Reference     string `json:"reference"`
-	StopFile      string `json:"stop_file"`
-	PhaseModel    string `json:"phase_model,omitempty"`
-	ExpectedPhase string `json:"expected_phase,omitempty"`
-	phaseModel    *PhaseModel
-	ctx           context.Context
-	deadline      time.Time
-	guardProbe    bool
-	primitiveOnly bool
-	onReceipt     func(InputReceipt) error
+	Kind               string `json:"kind"`
+	X                  int    `json:"x"`
+	Y                  int    `json:"y"`
+	Reference          string `json:"reference"`
+	StopFile           string `json:"stop_file"`
+	PhaseModel         string `json:"phase_model,omitempty"`
+	ExpectedPhase      string `json:"expected_phase,omitempty"`
+	phaseModel         *PhaseModel
+	extraPhaseModel    *PhaseModel
+	extraExpectedPhase string
+	imageGuard         func(image.Image) error
+	ctx                context.Context
+	deadline           time.Time
+	guardProbe         bool
+	primitiveOnly      bool
+	onReceipt          func(InputReceipt) error
 }
 
 func (a Action) Validate() error {

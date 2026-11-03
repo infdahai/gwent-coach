@@ -2,7 +2,7 @@
 
 `coach control` keeps one host in the signed-in Windows desktop. Mac and Windows
 clients use authenticated loopback HTTP; Mac reaches it through an SSH tunnel.
-Capture and manual click work with an ordinary foreground application. Existing
+Capture, manual click and hold work with an ordinary foreground application. Existing
 `coach` observation flags remain Gwent-only. The optional `run-session` command
 uses the existing calibrated Gwent session runner and its journals/interlock.
 This does not establish autonomous match acceptance.
@@ -101,9 +101,17 @@ With that app still foreground, issue one reviewed click:
 
 ```sh
 ./dist/coach control click -token-file "$TOKEN" -reference CAPTURE_ID -x 120 -y 80
+./dist/coach control hold -token-file "$TOKEN" -reference CAPTURE_ID -x 120 -y 80
 ```
 
-Replace `CAPTURE_ID` with the printed 32-character hex ID. A new capture
+Replace `CAPTURE_ID` with the printed 32-character hex ID. `hold` performs a fixed
+1.5-second left-button press using the same click guards and fresh-reference rule.
+Guards run every 50 ms during the hold; if the foreground, cursor, window or stop
+latch changes, cleanup releases the button and returns `partial_or_unknown`. A
+cancel or guard failure after mouse-down still attempts one cleanup release and
+never repeats the down event. `delivered_unconfirmed` means both events were
+accepted by `SendInput`, and the final guard passed, but the application may have
+rejected or ignored the gesture. A new capture
 supersedes the previous reference. Capture references are claimed durably before
 cursor movement and can never be reused, including after an error. A changed
 HWND, PID, session, desktop, DPI, client rectangle, minimized state, covered
@@ -142,8 +150,8 @@ receipt and never executes, even with a different payload or after restart.
 
 An HTTP response confirms transport, not application behavior. A receipt's
 `accepted` state means pending; `completed` means the backend returned without
-error; `failed` preserves its error and any input delivery detail. Click input
-`delivered_unconfirmed` means Windows accepted both events, not that the app did
+error; `failed` preserves its error and any input delivery detail. Click/hold input
+`delivered_unconfirmed` means Windows accepted the events, not that the app did
 what you intended. `partial_or_unknown`, cursor motion, and failed receipts must
 be reconciled using the screen and logs. The CLI exits nonzero for failed/rejected
 capture or click. Session semantic results remain in the native session journals.

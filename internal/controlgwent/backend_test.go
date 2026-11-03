@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gwentcoachmvp/internal/observe"
@@ -39,6 +40,18 @@ func TestSessionMustUseHostStopLatch(t *testing.T) {
 	write(loopPath, observe.NativeLoopConfig{StopFile: "STOP"})
 	if b.Validate() == nil {
 		t.Fatal("accepted relative session stop")
+	}
+}
+
+func TestObservedSessionDoesNotFallBackToLegacy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.json")
+	data := []byte(`{"Kind":"observed-match-v1","LoopConfig":"must-not-open.json"}`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := (Backend{SessionConfig: path}).Validate()
+	if err == nil || !strings.Contains(err.Error(), "complete observed-match configuration required") {
+		t.Fatal(err)
 	}
 }
 

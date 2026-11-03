@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -15,6 +16,13 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "control" {
 		if err := runControl(os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "preflight-observed" {
+		if err := runPreflight(os.Args[2:], os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -43,6 +51,7 @@ func main() {
 	guardProbe := flag.String("guard-probe", "", "capture guarded cursor transition without mouse button input")
 	hoverAnnotate := flag.String("annotate-hand", "", "bounded Windows hover/OCR pass with calibrated slot regions")
 	collect := flag.String("collect-readonly", "", "bounded Windows capture and numeric recognition config; never sends input")
+	observedMatch := flag.String("observed-match", "", "run one local observed versus-computer match with calibrated safe card plays")
 	nativeSession := flag.String("native-session", "", "run a pinned Windows multi-match session and export confirmed training samples")
 	nativeLoop := flag.String("native-loop", "", "run calibrated Windows recognition, rules and input loop")
 	nativeSlice := flag.String("native-opening", "", "run one calibrated Windows training opening with a 10s budget")
@@ -58,6 +67,10 @@ func main() {
 	inspectRecovery := flag.String("inspect-navigation-recovery", "", "inspect an events.jsonl file without modifying it or sending input")
 	claim := flag.String("inspect-navigation-claim", "", "optional navigation.claim path to inspect read-only")
 	flag.Parse()
+	if *observedMatch != "" && (*collect != "" || *nativeSession != "" || *nativeLoop != "" || *guardProbe != "" || *hoverAnnotate != "" || *nativeSlice != "" || *handScan != "" || *training || *navigate || *action != "" || *count != 1 || *width != 0 || *quality != 0 || *timings || *labels != "" || *recognize != "" || *replay != "" || *rehearsal != "" || *ocrImage != "" || *diagnosePhase != "" || *inspectRecovery != "") {
+		fmt.Fprintln(os.Stderr, "observed match cannot be combined with other modes")
+		os.Exit(1)
+	}
 	if *timings && (*collect != "" || *nativeSession != "" || *nativeLoop != "" || *guardProbe != "" || *hoverAnnotate != "" || *nativeSlice != "" || *handScan != "" || *training || *navigate || *action != "") {
 		fmt.Fprintln(os.Stderr, "capture timings are available only for observation sampling")
 		os.Exit(1)
@@ -173,7 +186,13 @@ func main() {
 	logger := log.New(f, "", log.LstdFlags|log.LUTC)
 	logger.Printf("starting pid=%d action=%q", os.Getpid(), *action)
 	var runErr error
-	if *collect != "" {
+	if *observedMatch != "" {
+		var cfg observe.ObservedMatchConfig
+		cfg, runErr = observe.LoadObservedMatchConfig(*observedMatch)
+		if runErr == nil {
+			runErr = observe.RunObservedMatch(context.Background(), *out, logger, cfg, os.Stdout)
+		}
+	} else if *collect != "" {
 		runErr = observe.RunReadOnlyCollection(*out, logger, *collect, *stopFile, *count, *interval)
 	} else if *nativeSession != "" {
 		runErr = observe.RunNativeSession(*out, logger, *nativeSession, os.Stdout)

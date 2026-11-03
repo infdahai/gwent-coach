@@ -32,6 +32,10 @@ func RunHoverAnnotation(_ string, _ *log.Logger, _ string, _ io.Writer) error {
 	return fmt.Errorf("hover annotation requires Windows interactive desktop")
 }
 
+func RunObservedMatch(_ context.Context, _ string, _ *log.Logger, _ ObservedMatchConfig, _ io.Writer) error {
+	return fmt.Errorf("observed match requires Windows interactive desktop")
+}
+
 func RunNativeSessionContext(_ context.Context, _ string, _ *log.Logger, _ string, _ io.Writer) error {
 	return fmt.Errorf("native session requires Windows interactive desktop")
 }

@@ -24,11 +24,20 @@ func (cliBackend) Capture(context.Context) (desktop.Capture, error) {
 func (cliBackend) Click(context.Context, desktop.Capture, int, int, string) (desktop.Receipt, error) {
 	return desktop.Receipt{Outcome: "partial_or_unknown", EventsSent: 1}, errors.New("input interrupted")
 }
+func (cliBackend) Hold(context.Context, desktop.Capture, int, int, string) (desktop.Receipt, error) {
+	return desktop.Receipt{Outcome: "partial_or_unknown", EventsSent: 1}, errors.New("input interrupted")
+}
 func (cliBackend) RunSession(context.Context, string, io.Writer) error {
 	return errors.New("session unavailable")
 }
 
-func TestControlCLICaptureAndFailedClick(t *testing.T) {
+func TestControlCLICaptureAndFailedInput(t *testing.T) {
+	for _, kind := range []string{"click", "hold"} {
+		t.Run(kind, func(t *testing.T) { controlCLIFailedInput(t, kind) })
+	}
+}
+
+func controlCLIFailedInput(t *testing.T, kind string) {
 	dir := t.TempDir()
 	token := strings.Repeat("a", 64)
 	tokenPath := filepath.Join(dir, "token")
@@ -58,7 +67,7 @@ func TestControlCLICaptureAndFailedClick(t *testing.T) {
 	}
 	output.Reset()
 	diagnostics.Reset()
-	err = runControl([]string{"click", "-url", s.URL, "-token-file", tokenPath, "-reference", id, "-x", "10", "-y", "20"}, &output, &diagnostics)
+	err = runControl([]string{kind, "-url", s.URL, "-token-file", tokenPath, "-reference", id, "-x", "10", "-y", "20"}, &output, &diagnostics)
 	if err == nil || !strings.Contains(err.Error(), "input interrupted") || !strings.Contains(output.String(), "partial_or_unknown") {
 		t.Fatalf("hidden partial receipt output=%s err=%v", &output, err)
 	}

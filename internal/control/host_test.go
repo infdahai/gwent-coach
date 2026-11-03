@@ -23,6 +23,7 @@ const testToken = "0123456789abcdef0123456789abcdef"
 
 type fakeBackend struct {
 	clicks  atomic.Int32
+	holds   atomic.Int32
 	runs    atomic.Int32
 	capture func(context.Context) (desktop.Capture, error)
 	click   func(context.Context) (desktop.Receipt, error)
@@ -37,6 +38,13 @@ func (f *fakeBackend) Capture(ctx context.Context) (desktop.Capture, error) {
 }
 func (f *fakeBackend) Click(ctx context.Context, _ desktop.Capture, _, _ int, _ string) (desktop.Receipt, error) {
 	f.clicks.Add(1)
+	if f.click != nil {
+		return f.click(ctx)
+	}
+	return desktop.Receipt{Outcome: "delivered_unconfirmed", EventsSent: 2}, nil
+}
+func (f *fakeBackend) Hold(ctx context.Context, _ desktop.Capture, _, _ int, _ string) (desktop.Receipt, error) {
+	f.holds.Add(1)
 	if f.click != nil {
 		return f.click(ctx)
 	}

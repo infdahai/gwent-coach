@@ -295,7 +295,7 @@ func (h *Host) command(w http.ResponseWriter, cmd Command) {
 		respond(w, 200, r)
 		return
 	}
-	if cmd.Kind != "capture" && cmd.Kind != "click" && cmd.Kind != "run-session" {
+	if cmd.Kind != "capture" && cmd.Kind != "click" && cmd.Kind != "hold" && cmd.Kind != "run-session" {
 		reject(fmt.Errorf("unknown command"))
 		return
 	}
@@ -317,7 +317,7 @@ func (h *Host) command(w http.ResponseWriter, cmd Command) {
 		}
 	}
 	ref := h.ref
-	if cmd.Kind == "click" {
+	if cmd.Kind == "click" || cmd.Kind == "hold" {
 		if !validID(cmd.Reference) || cmd.Reference != h.refID || ref.At.IsZero() || time.Since(ref.At) < 0 || time.Since(ref.At) > desktop.MaxAge {
 			reject(fmt.Errorf("fresh server-owned capture required"))
 			return
@@ -358,9 +358,13 @@ func (h *Host) run(ctx context.Context, cmd Command, r Receipt, ref desktop.Capt
 				r.Reference = cmd.ID
 			}
 		}
-	case "click":
+	case "click", "hold":
+		inputAction := h.backend.Click
+		if cmd.Kind == "hold" {
+			inputAction = h.backend.Hold
+		}
 		var input desktop.Receipt
-		input, err = h.backend.Click(ctx, ref, cmd.X, cmd.Y, h.cfg.StopFile)
+		input, err = inputAction(ctx, ref, cmd.X, cmd.Y, h.cfg.StopFile)
 		r.Input = &input
 	case "run-session":
 		out := filepath.Join(h.cfg.Root, "sessions", cmd.ID)
